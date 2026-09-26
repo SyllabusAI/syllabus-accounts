@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encrypt } from "../src/crypto";
+import { encrypt, trialHash } from "../src/crypto";
+import { toBase64Url } from "../src/util";
 import * as db from "../src/db";
 import type { WelcomeFrame } from "../src/panel-relay";
 import { claimDevice, get, grant, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
@@ -380,13 +381,13 @@ describe("afterwards", () => {
     expect((await confirm(mine.cookie, "again@example.com")).status).toBe(200);
     vi.unstubAllGlobals();
 
-    const fresh = await signedInAs("again@example.com", mine.account.google_sub);
-    expect(fresh.account.id).not.toBe(mine.account.id);
-    expect(await db.devicesOf(env.DB, fresh.account.id)).toEqual([]);
-    expect(await db.allowance(env.DB, fresh.account.id)).toBeNull();
-    expect(await db.driveGrant(env.DB, fresh.account.id)).toBeNull();
-    expect(await db.stripeCustomerOf(env.DB, fresh.account.id)).toBeNull();
-    const html = await (await get("/", { Cookie: fresh.cookie })).text();
+    const cookie = await googleSignIn(mine.account.google_sub, "again@example.com");
+    const fresh = await db.accountById(env.DB, (await sessionAccount(cookie))!);
+    expect(fresh!.id).not.toBe(mine.account.id);
+    expect(await db.devicesOf(env.DB, fresh!.id)).toEqual([]);
+    expect(await db.driveGrant(env.DB, fresh!.id)).toBeNull();
+    expect(await db.stripeCustomerOf(env.DB, fresh!.id)).toBeNull();
+    const html = await (await get("/", { Cookie: cookie })).text();
     expect(html).toContain("again@example.com");
     expect(html).toContain("No Macs yet");
   });
@@ -399,5 +400,158 @@ describe("afterwards", () => {
     expect((await confirm(mine.cookie, "webhook-after@example.com")).status).toBe(200);
     expect(await db.accountIdForLinkedCustomer(env.DB, `cus_${mine.account.id}`)).toBeNull();
     expect(await db.accountIdForCustomer(env.DB, `cus_${mine.account.id}`)).toBeNull();
+  });
+});
+
+// --- The free trial is not handed out twice --------------------------------
+
+const CLIENT = "test-client-id.apps.googleusercontent.com";
+
+function jwt(claims: Record<string, unknown>): string {
+  const enc = (o: unknown) => toBase64Url(new TextEncoder().encode(JSON.stringify(o)));
+  return `${enc({ alg: "RS256" })}.${enc(claims)}.sig`;
+}
+
+/** The real sign-in, through /login and the callback, with Google's token endpoint stubbed. */
+async function googleSignIn(sub: string, email: string): Promise<string> {
+  const login = await get("/login?next=/");
+  const flowCookie = login.headers.get("Set-Cookie")!.split(";")[0];
+  const to = new URL(login.headers.get("Location")!);
+  const idToken = jwt({
+    iss: "https://accounts.google.com", aud: CLIENT, sub, exp: Math.floor(Date.now() / 1000) + 300,
+    nonce: to.searchParams.get("nonce"), email, email_verified: true, name: "Again",
+  });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ id_token: idToken }), { status: 200 })));
+  const cb = await get(`/oauth2/callback?state=${to.searchParams.get("state")}&code=ok`, { Cookie: flowCookie });
+  vi.unstubAllGlobals();
+  expect(cb.status).toBe(302);
+  const session = cb.headers.get("Set-Cookie")!.split(",").find((c) => c.includes("syllabus_accounts_session="))!;
+  return session.split(";")[0].trim();
+}
+
+async function sessionAccount(cookie: string): Promise<string | null> {
+  const me = await get("/me", { Cookie: cookie });
+  if (me.status !== 200) return null;
+  return ((await me.json()) as { account: { id: string } }).account.id;
+}
+
+function stripeCheckout() {
+  const calls: URLSearchParams[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push(new URLSearchParams(typeof init.body === "string" ? init.body : ""));
+      return new Response(JSON.stringify({ id: "cs_1", url: "https://checkout.stripe.com/c/pay/cs_1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  return calls;
+}
+
+describe("the free trial after a deletion", () => {
+  it("keeps a keyed hash of the Google sub, never the sub itself", async () => {
+    const sub = "google-sub-1234567890";
+    const { cookie } = await signedInAs("hashed@example.com", sub);
+    expect((await confirm(cookie, "hashed@example.com")).status).toBe(200);
+    const expected = await trialHash(env.SESSION_SECRET, sub);
+    const row = await env.DB.prepare("SELECT * FROM trial_used WHERE sub_hash = ?").bind(expected).first<Record<string, string>>();
+    expect(row).not.toBeNull();
+    expect(Object.keys(row!).sort()).toEqual(["created_at", "sub_hash"]);
+    expect(row!.sub_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row!.sub_hash).not.toContain(sub);
+    expect(row!.sub_hash).not.toContain("hashed");
+    // Keyed: the same sub under another secret is a different value.
+    expect(await trialHash("another-secret", sub)).not.toBe(row!.sub_hash);
+    const raw = await env.DB.prepare("SELECT COUNT(*) AS n FROM trial_used WHERE sub_hash = ?").bind(sub).first<{ n: number }>();
+    expect(raw!.n).toBe(0);
+  });
+
+  it("gives the new account no trial: the proxy refuses and nothing is recordable", async () => {
+    const email = "no-second-trial@example.com";
+    const first = await signedInAs(email);
+    expect((await confirm(first.cookie, email)).status).toBe(200);
+
+    const cookie = await googleSignIn("sub-" + email, email);
+    const id = (await sessionAccount(cookie))!;
+    expect(id).not.toBe(first.account.id);
+    expect((await db.allowance(env.DB, id))?.source).toBe("trial_used");
+
+    // A Mac on the new account, through the same identity.
+    const mac = await claimDevice(email);
+    expect(mac.account.id).toBe(id);
+    const usage = (await (await get("/proxy/usage", { Authorization: `Bearer ${mac.token}` })).json()) as {
+      source: string;
+      recordable_seconds: number;
+      audio_seconds: { allowance: number };
+    };
+    expect(usage.source).toBe("trial_used");
+    expect(usage.recordable_seconds).toBe(0);
+    expect(usage.audio_seconds.allowance).toBe(0);
+
+    const upstream = vi.fn(async () => new Response("should not be called", { status: 500 }));
+    vi.stubGlobal("fetch", upstream);
+    const form = new FormData();
+    form.set("audio", new File([new Uint8Array(1000)], "chunk_001.m4a", { type: "audio/mp4" }));
+    form.set("duration_seconds", "60");
+    const res = await SELF.fetch(ORIGIN + "/proxy/transcribe", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${mac.token}` },
+      body: form,
+    });
+    expect(res.status).toBe(402);
+    expect(((await res.json()) as { error: string }).error).toBe("allowance_exhausted");
+    expect(upstream).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+
+    const html = await (await get("/", { Cookie: cookie })).text();
+    expect(html).toContain("already used");
+    expect(html).not.toContain("You are on the free trial");
+  });
+
+  it("starts that account's plan without a Stripe trial, and still sells it", async () => {
+    const email = "straight-to-paid@example.com";
+    const first = await signedInAs(email);
+    expect((await confirm(first.cookie, email)).status).toBe(200);
+    const cookie = await googleSignIn("sub-" + email, email);
+
+    const calls = stripeCheckout();
+    const res = await postForm("/billing/checkout", { tier: "standard" }, { Cookie: cookie });
+    expect(res.status).toBe(303);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].get("mode")).toBe("subscription");
+    expect(calls[0].get("line_items[0][price]")).toBe(env.STRIPE_PRICE_STANDARD);
+    expect(calls[0].get("subscription_data[trial_period_days]")).toBeNull();
+    expect(calls[0].get("payment_method_collection")).toBe("always");
+  });
+
+  it("never overwrites a paid plan at a later sign-in", async () => {
+    const email = "paid-later@example.com";
+    const first = await signedInAs(email);
+    expect((await confirm(first.cookie, email)).status).toBe(200);
+    const cookie = await googleSignIn("sub-" + email, email);
+    const id = (await sessionAccount(cookie))!;
+    await db.putAllowance(env.DB, id, grant(162_000, 1_350_000, "pro"));
+    await googleSignIn("sub-" + email, email);
+    expect((await db.allowance(env.DB, id))?.source).toBe("pro");
+  });
+
+  it("still gives a brand-new Google account the trial", async () => {
+    const email = "brand-new@example.com";
+    const cookie = await googleSignIn("sub-" + email, email);
+    const id = (await sessionAccount(cookie))!;
+    expect(await db.allowance(env.DB, id)).toBeNull();
+    const mac = await claimDevice(email);
+    const usage = (await (await get("/proxy/usage", { Authorization: `Bearer ${mac.token}` })).json()) as {
+      source: string;
+      recordable_seconds: number;
+    };
+    expect(usage.source).toBe("trial");
+    expect(usage.recordable_seconds).toBeGreaterThan(0);
+
+    const calls = stripeCheckout();
+    await postForm("/billing/checkout", { tier: "starter" }, { Cookie: cookie });
+    expect(calls[0].get("subscription_data[trial_period_days]")).toBe("90");
   });
 });

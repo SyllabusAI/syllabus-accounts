@@ -80,7 +80,9 @@ export function privacyPage(): string {
            You can also remove Syllabus under your Google account's third-party access settings.</li>
        <li>Delete your account and everything stored with it from your account page, under Delete your account. Any
            plan is canceled, every Mac is signed out, your Drive connection is revoked, and the rest is erased. Stripe
-           keeps its own record of past payments.</li>
+           keeps its own record of past payments. After a deletion we keep one thing: a one-way scrambled identifier
+           made from your Google sign-in, used only to stop the free trial being given out twice. It cannot be turned
+           back into your name or email, and nothing else is kept with it.</li>
      </ul>
      <p>This service is open source; its code is at
         <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a>.</p>
@@ -184,8 +186,9 @@ export function deleteAccountPage(account: Account, summary: DeletionSummary, er
      <p>This permanently deletes the Syllabus account for <strong>${h(account.email)}</strong>. It cannot be undone.</p>
      <ul>${items}</ul>
      <p class="muted">Recordings and notes on your Mac and in your Google Drive are not touched. Stripe keeps its own
-        record of any past payments and invoices. Signing in again later with the same Google account starts a new,
-        empty account.</p>
+        record of any past payments and invoices. We keep one scrambled identifier made from your Google sign-in, which
+        cannot be turned back into your name or email, only so the free trial is not given out twice. Signing in again
+        later with the same Google account starts a new, empty account without a free trial.</p>
      <form method="post" action="/account/delete">
        <label for="confirm_email">Type <strong>${h(account.email)}</strong> to confirm</label>
        <div class="row" style="display:flex;gap:0.6em;flex-wrap:wrap">
@@ -302,6 +305,14 @@ function billingSection(view: BillingView | null): string {
       : "";
     return `<p><strong>${h(name)}</strong>, $${priceOf(sub.tier)} a month.</p>${state}${renewal}${usedLine}${topUp}
       <p>${manage}</p>`;
+  }
+
+  if (source === "trial_used") {
+    // A Google identity that deleted an earlier account after its trial
+    // (migrations/0013). No second trial, and no Stripe trial at Checkout.
+    return `<p>The free trial for this Google account was already used, on an account that was deleted, so there are no free hours here.</p>
+      <p class="muted">Pick a plan to start recording. Your card is charged when you subscribe, and you can change or cancel it yourself at any time.</p>
+      ${tierButtons()}${redeemForm()}`;
   }
 
   return `<p>You are on the free trial: <strong>${hours(allowedSeconds)}</strong> of lecture audio.</p>${usedLine}

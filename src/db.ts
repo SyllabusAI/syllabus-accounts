@@ -834,6 +834,8 @@ export async function allDeviceIdsOf(db: D1Database, accountId: string): Promise
  *
  * Kept, and why:
  *
+ * - trial_used gains a keyed hash of the Google sub (never the sub or the
+ *   email), so signing in again does not hand out a second free trial.
  * - stripe_events rows stay, with account_id blanked. The event id is what
  *   stops a redelivered Stripe event being handled twice, it carries nothing
  *   about the person, and blanking the account id leaves nothing that points
@@ -847,9 +849,12 @@ export async function allDeviceIdsOf(db: D1Database, accountId: string): Promise
  * Adding a table with an account id in it means adding it here; test/account.test.ts checks every table that
  * has such a column, so it fails until this is updated.
  */
-export async function deleteAccountData(db: D1Database, accountId: string): Promise<void> {
+export async function deleteAccountData(db: D1Database, accountId: string, subHash: string): Promise<void> {
   const devicesOfAccount = "SELECT id FROM devices WHERE account_id = ?";
   await db.batch([
+    // The one thing that outlives the account; see migrations/0013. In the
+    // same transaction, so an account is never gone without it.
+    db.prepare("INSERT OR IGNORE INTO trial_used (sub_hash, created_at) VALUES (?, ?)").bind(subHash, now()),
     db.prepare(`DELETE FROM device_tokens WHERE device_id IN (${devicesOfAccount})`).bind(accountId),
     db
       .prepare(`DELETE FROM device_codes WHERE approved_account_id = ? OR approved_device_id IN (${devicesOfAccount})`)
@@ -870,4 +875,25 @@ export async function deleteAccountData(db: D1Database, accountId: string): Prom
     db.prepare("UPDATE stripe_events SET account_id = '' WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM accounts WHERE id = ?").bind(accountId),
   ]);
+}
+
+/** Whether a Google identity (as its trialHash) already spent a trial on a deleted account. */
+export async function trialWasUsed(db: D1Database, subHash: string): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS used FROM trial_used WHERE sub_hash = ?").bind(subHash).first();
+  return row !== null;
+}
+
+/**
+ * Give an account the zero allowance of a repeat trial, unless it already has
+ * a row. INSERT OR IGNORE, so a paid plan written by the webhook is never
+ * overwritten by a later sign-in.
+ */
+export async function blockTrial(db: D1Database, accountId: string, grant: AllowanceGrant): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO allowances (account_id, audio_seconds, summary_tokens, assistant_sessions, source, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(accountId, grant.audio_seconds, grant.summary_tokens, grant.assistant_sessions, grant.source, now())
+    .run();
 }

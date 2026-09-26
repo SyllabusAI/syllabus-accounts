@@ -29,9 +29,14 @@ their Google Drive grant.
   subscription first, and deletes nothing if Stripe cannot do that; then it
   revokes the Drive grant at Google, deletes every row that names the account
   in one D1 transaction (so every device token dies with it), drops each Mac's
-  relay socket, and signs the browser out. Only `stripe_events` rows stay, with
-  the account id blanked, so a redelivered webhook is still recognized. Signing
-  in again with the same Google account starts a new, empty account.
+  relay socket, and signs the browser out. Two things stay: `stripe_events`
+  rows with the account id blanked, so a redelivered webhook is still
+  recognized, and one row in `trial_used`, a keyed HMAC of the Google `sub`
+  (never the sub or the email). Signing in again with the same Google account
+  starts a new, empty account with no free trial: it gets an allowance row of
+  zeros (`source = 'trial_used'`) instead of the trial a missing row means,
+  and Checkout starts its plan without a Stripe trial. Paid plans work as for
+  anybody else.
 
 ## The device flow
 
@@ -258,6 +263,12 @@ records every webhook event id so a retried delivery is handled once, and
 `stripe_customers` is which account a Stripe customer is. None of them carries
 a card number or anything else about a payment method; Stripe holds all of
 that.
+
+`trial_used` holds one row per deleted account whose Google identity must not
+get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
+from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
+forgets it, which gives those people a trial again rather than locking anybody
+out.
 
 ## Billing
 

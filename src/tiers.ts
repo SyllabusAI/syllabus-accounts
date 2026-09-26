@@ -129,6 +129,20 @@ export const LAPSED_ALLOWANCE: AllowanceGrant = {
 };
 
 /**
+ * A new account for a Google identity whose earlier account was deleted after
+ * its trial. Zeros, like a lapsed subscription, and written at sign-in so the
+ * "no row means the trial" default in src/proxy.ts never applies to it. See
+ * migrations/0013_trial_used.sql. The webhook overwrites it like any other
+ * row once a paid plan starts.
+ */
+export const TRIAL_USED_ALLOWANCE: AllowanceGrant = {
+  audio_seconds: 0,
+  summary_tokens: 0,
+  assistant_sessions: 0,
+  source: "trial_used",
+};
+
+/**
  * The statuses that entitle.
  *
  * `past_due` is deliberately in the list. Stripe keeps a subscription in it

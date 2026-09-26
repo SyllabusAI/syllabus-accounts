@@ -91,6 +91,13 @@ billing.post("/billing/checkout", async (c) => {
    * subscription is free from the first day.
    */
   const redeeming = String(form.get("redeem") ?? "") === "1";
+  /**
+   * Somebody whose free trial was spent on an account they since deleted
+   * (migrations/0013) starts paying on day one. The Stripe trial is the free
+   * trial in another shape, so handing it back here would undo the block.
+   */
+  const trialSpent = (await db.allowance(c.env.DB, account!.id))?.source === "trial_used";
+  const withTrial = !redeeming && !trialSpent;
 
   // A customer we already have keeps one person to one Stripe customer, so
   // their invoices and their card stay in one place across a resubscription.
@@ -107,7 +114,7 @@ billing.post("/billing/checkout", async (c) => {
       client_reference_id: account!.id,
       subscription_data: {
         metadata: { account_id: account!.id },
-        ...(redeeming ? {} : { trial_period_days: TRIAL_PERIOD_DAYS }),
+        ...(withTrial ? { trial_period_days: TRIAL_PERIOD_DAYS } : {}),
       },
       ...(customer ? { customer, customer_update: { address: "auto", name: "auto" } } : { customer_email: account!.email }),
       // Texas taxes this as a data processing service, so an address has to be

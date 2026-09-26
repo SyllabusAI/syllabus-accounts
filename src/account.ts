@@ -19,6 +19,7 @@
  *    deletion: the stored token is deleted in the next step either way, so
  *    this service can never use it again.
  * 3. The database. Every row with the account in it goes in one D1 batch,
+ *    and a keyed hash of the Google sub goes into trial_used in the same one,
  *    which is one transaction (deleteAccountData in db.ts), so the account is
  *    never left half deleted. Device tokens are rows in it, so every Mac is
  *    signed out in the same instant. If the batch fails, the page says the
@@ -35,12 +36,25 @@
 
 import { Hono, type Context } from "hono";
 import { cancelEverySubscription, isLive } from "./billing";
+import { trialHash } from "./crypto";
 import * as db from "./db";
 import { revokeAtGoogle } from "./drive";
-import type { Account, AppEnv } from "./env";
+import type { Account, AppEnv, Bindings } from "./env";
 import { accountDeletedPage, deleteAccountPage, type DeletionSummary } from "./pages";
 import { forgetRelay } from "./relay";
 import { browserOnly, clearSession, sameOrigin } from "./session";
+import { TRIAL_USED_ALLOWANCE } from "./tiers";
+
+/**
+ * At sign-in: a Google identity whose earlier account was deleted gets no
+ * second trial. Called on every sign-in, which is one indexed read; writes
+ * only when the identity is in trial_used and the account has no allowance
+ * row yet, so a paid plan is never touched. See migrations/0013.
+ */
+export async function applyTrialBlock(env: Pick<Bindings, "DB" | "SESSION_SECRET">, accountId: string, sub: string): Promise<void> {
+  if (!(await db.trialWasUsed(env.DB, await trialHash(env.SESSION_SECRET, sub)))) return;
+  await db.blockTrial(env.DB, accountId, TRIAL_USED_ALLOWANCE);
+}
 
 export const account = new Hono<AppEnv>();
 
@@ -105,7 +119,7 @@ account.post("/account/delete", async (c) => {
 
   // 3. Every row, in one transaction.
   try {
-    await db.deleteAccountData(c.env.DB, who.id);
+    await db.deleteAccountData(c.env.DB, who.id, await trialHash(c.env.SESSION_SECRET, who.google_sub));
   } catch (err) {
     console.log(`account ${who.id}: deleting the rows failed: ${(err as Error).message}`);
     return c.html(

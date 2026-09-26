@@ -14,6 +14,7 @@
 
 import { Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { applyTrialBlock } from "./account";
 import { upsertAccount } from "./db";
 import { finishConnect } from "./drive";
 import type { AppEnv } from "./env";
@@ -146,6 +147,8 @@ google.get(CALLBACK_PATH, async (c) => {
     name: claims.name ?? "",
     picture: claims.picture ?? "",
   });
+  // A Google identity that deleted an account after its trial gets no second one.
+  await applyTrialBlock(c.env, account.id, claims.sub);
   console.log(`signed in: ${account.email}`);
   deleteCookie(c, FLOW_COOKIE, { path: "/" });
   await setSession(c, account.id);
