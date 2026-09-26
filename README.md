@@ -100,8 +100,14 @@ when it was last connected, refreshing every 10 seconds; `/api/` paths get a
 JSON 503 with `relay: "not-connected"`. A request the panel does not answer
 in 25 seconds is a 504, and the socket is closed as dead, so a lid closed
 without a clean goodbye shows as not connected on the next request rather
-than hanging. The object hibernates between messages; the panel's pings are
-answered without waking it. The Durable Object class is SQLite-backed
+than hanging. The object hibernates between messages, and neither kind of
+keepalive wakes it. The WebSocket ping frames the panel sends today are
+answered by the Cloudflare runtime itself; they keep the path open and let the
+panel notice a dead link, but tell the service nothing. A panel may also send
+the text message `ping`, which the runtime answers with `pong` and timestamps;
+once a panel has done that, 90 seconds without one (three missed 30 second
+beats) and its socket is treated as dead: not connected on the account page and
+an immediate 503, not a 25 second wait. The Durable Object class is SQLite-backed
 (`new_sqlite_classes` in `wrangler.jsonc`), which every Workers plan allows.
 
 ## Running it
