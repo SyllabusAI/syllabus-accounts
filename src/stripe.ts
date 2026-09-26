@@ -191,6 +191,14 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
 
   const sub = event.data.object as Stripe.Subscription;
   const accountId = await accountFor(c, sub);
+  if (!accountId) {
+    // Checkout stamped an account that is no longer here: it was deleted, and
+    // deleting it is what canceled this subscription. Nothing is left to
+    // mirror it onto, and it will not start existing, so Stripe is told to
+    // stop rather than retrying for three days.
+    console.log(`stripe: ${event.type} for ${sub.id} names a deleted account; nothing to update`);
+    return "";
+  }
   await db.putSubscription(c.env.DB, rowFor(c.env, sub, accountId));
   await writeAllowance(c, accountId);
   return accountId;
@@ -200,7 +208,8 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
  * Whose subscription this is.
  *
  * In order: what Checkout stamped on the subscription, the link learned at
- * checkout, and any subscription this customer already has here. A
+ * checkout, and any subscription this customer already has here. A stamp
+ * naming an account that no longer exists answers "", meaning deleted. A
  * subscription event that beats its own checkout session answers none of the
  * three, which is ordinary rather than exceptional, so it is deferred: Stripe
  * retries with backoff for about three days and the session lands long
@@ -209,7 +218,11 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
  */
 async function accountFor(c: Context<AppEnv>, sub: Stripe.Subscription): Promise<string> {
   const stamped = idOf(sub.metadata?.account_id);
-  if (stamped && (await db.accountById(c.env.DB, stamped))) return stamped;
+  if (stamped) {
+    // Accounts are made at sign-in, before anybody can reach Checkout, so a
+    // stamp naming no account is one that was deleted since. "" says so.
+    return (await db.accountById(c.env.DB, stamped)) ? stamped : "";
+  }
 
   const customerId = idOf(sub.customer);
   if (customerId) {

@@ -204,6 +204,24 @@ describe("an event is handled once", () => {
   });
 });
 
+describe("an account that was deleted", () => {
+  it("has its subscription events accepted rather than retried for days", async () => {
+    // Deleting an account cancels its subscription at Stripe, which sends
+    // customer.subscription.deleted for an account that is no longer here.
+    // Checkout stamped the id, so there is no doubt whose it was, and it will
+    // never exist again: retrying would only fill Stripe's failure log.
+    const event = subscriptionEvent("customer.subscription.deleted", {
+      id: "sub_deleted_account",
+      customer: "cus_deleted_account",
+      status: "canceled",
+      metadata: { account_id: "an-account-that-was-deleted" },
+    });
+    const res = await deliver(event);
+    expect(res.status).toBe(200);
+    expect(await db.subscriptionById(env.DB, "sub_deleted_account")).toBeNull();
+  });
+});
+
 describe("checkout tells us whose customer this is", () => {
   it("links the customer to the account and writes no allowance yet", async () => {
     const { account } = await signedInAs("checkout@example.com");

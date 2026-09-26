@@ -107,7 +107,33 @@ export class PanelRelay extends DurableObject<Bindings> {
     const op = request.headers.get("X-Relay-Op") ?? "";
     if (op === "connect") return this.acceptPanel(request);
     if (op === "state") return Response.json(await this.describe());
+    if (op === "forget") return this.forget();
     return this.relay(request);
+  }
+
+  /**
+   * The device's account was deleted: drop the panel's socket and what this
+   * object remembers about it (the Mac's name, when it last connected).
+   *
+   * Only the Worker reaches this: the relay route builds its own headers for
+   * the object and never carries X-Relay-Op from a browser. The panel sees
+   * the close and tries to reconnect, and its token no longer resolves, so it
+   * is refused at /relay/connect before it gets here. The close handler may
+   * write a bare disconnected_at back afterwards; that is a timestamp with no
+   * name beside it.
+   */
+  private async forget(): Promise<Response> {
+    const state = await this.state();
+    for (const ws of this.ctx.getWebSockets("panel")) {
+      try {
+        ws.close(4001, "this account was deleted");
+      } catch {
+        /* already closed */
+      }
+    }
+    for (const id of [...this.pending.keys()]) this.finish(id, this.notConnected(state, "/api/"));
+    await this.ctx.storage.deleteAll();
+    return Response.json({ ok: true });
   }
 
   // --- The panel's socket -------------------------------------------------------

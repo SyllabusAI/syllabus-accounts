@@ -20,6 +20,9 @@ const STYLE = `
   td, th { text-align: left; padding: 0.4em 0.6em 0.4em 0; border-bottom: 1px solid #8883; vertical-align: top; }
   .ok { color: #15803d; }
   .warn { color: #b45309; }
+  button.danger { background: #b91c1c; color: white; border-color: transparent; }
+  section.danger { margin-top: 3em; padding-top: 1em; border-top: 1px solid #8884; }
+  label { display: block; margin: 1em 0 0.3em; }
 `;
 
 export function page(title: string, body: string): string {
@@ -43,7 +46,7 @@ export function landing(): string {
 export function privacyPage(): string {
   return page(
     "Privacy",
-    `<p class="muted">Last updated September 13, 2026.</p>
+    `<p class="muted">Last updated September 26, 2026.</p>
      <p>Syllabus is a personal lecture-recording tool. The recording, transcription, and summarizing all happen on
         the Mac that runs it. This account service exists so that a Mac can be tied to your identity and so your
         settings and your Google Drive connection can follow you to another Mac.</p>
@@ -75,9 +78,9 @@ export function privacyPage(): string {
        <li>Remove a Mac from your account page at any time; its token stops working at once.</li>
        <li>Disconnect Google Drive from your account page; the grant is revoked at Google for every Mac at once.
            You can also remove Syllabus under your Google account's third-party access settings.</li>
-       <li>To delete your account and everything stored with it, open an issue at
-           <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a> or use
-           the support email on the Google sign-in screen, and it will be removed.</li>
+       <li>Delete your account and everything stored with it from your account page, under Delete your account. Any
+           plan is canceled, every Mac is signed out, your Drive connection is revoked, and the rest is erased. Stripe
+           keeps its own record of past payments.</li>
      </ul>
      <p>This service is open source; its code is at
         <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a>.</p>
@@ -151,7 +154,59 @@ export function accountPage(
      ${driveSection(grant)}
      <h2>Connect a Mac</h2>
      <p class="muted">Syllabus shows a code on its Setup page. Enter it here.</p>
-     ${codeForm("", "")}`,
+     ${codeForm("", "")}
+     <section class="danger">
+       <h2>Delete your account</h2>
+       <p class="muted">This removes your Macs, your class schedule, your Google Drive connection, your plan, and your
+          usage history from Syllabus, for good. Your recordings and notes stay on your Mac and in your Google Drive.</p>
+       <p><a href="/account/delete"><button>Delete your account</button></a></p>
+     </section>`,
+  );
+}
+
+/** What deleting an account will do, said before it is done. */
+export type DeletionSummary = { macs: number; drive: boolean; plan: boolean };
+
+/** The confirmation step: what goes, what stays, and a box to type your email in. */
+export function deleteAccountPage(account: Account, summary: DeletionSummary, error: string): string {
+  const macs = summary.macs === 1 ? "Your Mac is" : summary.macs > 1 ? `All ${summary.macs} of your Macs are` : "";
+  const items = [
+    summary.plan
+      ? "<li>Your plan is canceled right away. You are not charged again, and the rest of the current billing period is not refunded.</li>"
+      : "",
+    macs ? `<li>${macs} signed out and removed. Syllabus on a Mac asks you to sign in again the next time you open it.</li>` : "",
+    summary.drive ? "<li>Your Google Drive connection is revoked. The notes already in your Drive stay there.</li>" : "",
+    "<li>Your class schedule, your usage history, and your account details are deleted.</li>",
+  ].join("");
+  return page(
+    "Delete your account",
+    `${error ? `<p class="warn">${h(error)}</p>` : ""}
+     <p>This permanently deletes the Syllabus account for <strong>${h(account.email)}</strong>. It cannot be undone.</p>
+     <ul>${items}</ul>
+     <p class="muted">Recordings and notes on your Mac and in your Google Drive are not touched. Stripe keeps its own
+        record of any past payments and invoices. Signing in again later with the same Google account starts a new,
+        empty account.</p>
+     <form method="post" action="/account/delete">
+       <label for="confirm_email">Type <strong>${h(account.email)}</strong> to confirm</label>
+       <div class="row" style="display:flex;gap:0.6em;flex-wrap:wrap">
+         <input id="confirm_email" name="confirm_email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+         <button class="danger">Delete my account</button>
+       </div>
+     </form>
+     <p class="muted"><a href="/">Keep my account</a></p>`,
+  );
+}
+
+/** After the deletion: signed out, and nothing left here. */
+export function accountDeletedPage(email: string): string {
+  return page(
+    "Your account is deleted",
+    `<p>Everything Syllabus stored for <strong>${h(email)}</strong> is gone, and you are signed out.</p>
+     <p>Syllabus on your Macs will ask you to sign in again. Your recordings and notes are still on your Mac and in
+        your Google Drive.</p>
+     <p class="muted">You can also remove Syllabus from your Google account under
+        <a href="https://myaccount.google.com/connections">third-party connections</a>.</p>
+     <p class="muted"><a href="/">Syllabus accounts</a></p>`,
   );
 }
 

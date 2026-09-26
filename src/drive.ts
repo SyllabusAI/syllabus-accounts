@@ -19,7 +19,7 @@ import { Hono, type Context } from "hono";
 import { setSignedCookie } from "hono/cookie";
 import { decrypt, encrypt } from "./crypto";
 import * as db from "./db";
-import type { AppEnv } from "./env";
+import type { AppEnv, Bindings } from "./env";
 import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, redirectUri, type Flow } from "./google";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
@@ -163,15 +163,27 @@ drive.post("/drive/disconnect", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
-  const grant = await db.driveGrant(c.env.DB, account.id);
-  if (grant && !grant.revoked_at) {
-    try {
-      const token = await decrypt(c.env.DRIVE_KEY, grant.refresh_token_enc);
-      await fetch(REVOKE_URL + "?" + new URLSearchParams({ token }), { method: "POST" });
-    } catch (err) {
-      console.log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
-    }
-  }
+  await revokeAtGoogle(c.env, account.id);
   await db.deleteDriveGrant(c.env.DB, account.id);
   return c.redirect("/");
 });
+
+/**
+ * Ask Google to end the account's Drive grant, if it holds a live one.
+ *
+ * Best effort, and deliberately: a Google that is down or a grant it has
+ * already dropped must not keep somebody from disconnecting or from deleting
+ * their account. The stored copy is deleted by the caller either way, so the
+ * refresh token is unusable by this service from then on, and the person can
+ * still remove Syllabus under their Google account's third-party access.
+ */
+export async function revokeAtGoogle(env: Pick<Bindings, "DB" | "DRIVE_KEY">, accountId: string): Promise<void> {
+  const grant = await db.driveGrant(env.DB, accountId);
+  if (!grant || grant.revoked_at) return;
+  try {
+    const token = await decrypt(env.DRIVE_KEY, grant.refresh_token_enc);
+    await fetch(REVOKE_URL + "?" + new URLSearchParams({ token }), { method: "POST" });
+  } catch (err) {
+    console.log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
+  }
+}
