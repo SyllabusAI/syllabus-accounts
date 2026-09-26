@@ -150,6 +150,12 @@ describe("signing out", () => {
 });
 
 describe("rate limits on the routes that answer strangers", () => {
+  it("sizes per-address limits for a lecture hall behind one NAT address", () => {
+    expect(LIMITS.login.limit).toBeGreaterThanOrEqual(600);
+    expect(LIMITS.callback.limit).toBeGreaterThanOrEqual(600);
+    expect(LIMITS.deviceApproveAddress.limit).toBeGreaterThanOrEqual(10 * LIMITS.deviceApprove.limit);
+  });
+
   it("limits /login per address", async () => {
     const ip = "198.51.100.10";
     await fill(`login:${ip}`, LIMITS.login);
@@ -184,7 +190,7 @@ describe("rate limits on the routes that answer strangers", () => {
 
     const ip = "198.51.100.30";
     const other = await signedInAs("guesser2@example.com");
-    await fill(`device-approve-ip:${ip}`, LIMITS.deviceApprove);
+    await fill(`device-approve-ip:${ip}`, LIMITS.deviceApproveAddress);
     const alsoRefused = await postForm("/device/approve", { user_code: started.user_code }, { Cookie: other.cookie, "CF-Connecting-IP": ip });
     expect(alsoRefused.status).toBe(429);
 

@@ -123,8 +123,11 @@ devices.post("/device/approve", async (c) => {
   // and its notes into this account's Drive. 32^8 codes against at most
   // PENDING_CAP live ones is already long odds; these make it hopeless, per
   // account and per address, so a pile of accounts on one address gains nothing.
-  for (const bucket of [`device-approve:${account.id}`, `device-approve-ip:${source(c)}`]) {
-    const wait = await overLimit(c, bucket, LIMITS.deviceApprove);
+  for (const [bucket, rule] of [
+    [`device-approve:${account.id}`, LIMITS.deviceApprove],
+    [`device-approve-ip:${source(c)}`, LIMITS.deviceApproveAddress],
+  ] as const) {
+    const wait = await overLimit(c, bucket, rule);
     if (wait !== null) return limitedPage(c, wait);
   }
   const form = await c.req.parseBody();

@@ -58,15 +58,15 @@ route, a secret, or a trust boundary changes.
 |---|---|---|
 | `GET /healthz`, `/privacy`, `/terms` | none | Static, no state |
 | `GET /` | none or session | Read only |
-| `GET /login` | none | Per-address limit; sets a signed flow cookie |
-| `GET /oauth2/callback` | flow cookie (state, nonce, PKCE) | Per-address limit before calling Google |
+| `GET /login` | none | Per-address limit (600 per 10 min); sets a signed flow cookie |
+| `GET /oauth2/callback` | flow cookie (state, nonce, PKCE) | Per-address limit (600 per 10 min) before calling Google |
 | `GET /logout` | session | Signs out only on `Sec-Fetch-Site: same-origin` or `none`; otherwise shows a button |
 | `POST /logout` | session | `sameOrigin` |
 | `GET /me` | session or device | Read only |
 | `POST /device/start` | none | Per-address limit, global pending cap |
 | `POST /device/poll` | device code | Per-address limit answered as RFC 8628 `slow_down`, never 429 |
 | `GET /device?code=` | session | Per-account limit on code lookups |
-| `POST /device/approve` | session, `browserOnly` | `sameOrigin`; per-account and per-address limits |
+| `POST /device/approve` | session, `browserOnly` | `sameOrigin`; 30 per 10 min per account, 300 per address |
 | `POST /device/revoke` | device | Bearer, not a cookie |
 | `POST /devices/:id/revoke`, `/devices/revoke-all` | session, `browserOnly` | `sameOrigin` |
 | `GET/PUT /settings/:name` | device | Bearer; 64K character cap |
@@ -155,5 +155,8 @@ global ceilings. Cloudflare absorbs volumetric floods in front of all of it.
   path `/`.
 - **An allowance row outlives a cancellation Stripe never delivers.** See the
   README's Billing section.
-- **Per-address limits are coarse on shared networks.** A campus shares one
-  address; the limits are set far above a lecture hall signing in at once.
+- **Per-address limits are coarse on shared networks.** Campus Wi-Fi and
+  carrier-grade NAT put a whole lecture hall behind one public address, so
+  per-address limits are ten times the per-account ones (600 sign-ins and
+  callbacks, 300 approvals per 10 minutes) and only stop a script; the
+  per-account limits hold each person to human rates.

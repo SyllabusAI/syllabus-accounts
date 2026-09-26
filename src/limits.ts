@@ -24,19 +24,35 @@ import { page } from "./pages";
 /** A limit: at most `limit` requests per `window` seconds, per key. */
 export type Limit = { limit: number; window: number };
 
+/**
+ * Why the per-ADDRESS limits are ten times the per-account ones.
+ *
+ * Campus Wi-Fi puts a whole lecture hall behind one public address (NAT, or
+ * carrier-grade NAT on a phone network). Two hundred students signing in at
+ * the start of a class is several hundred /login and /oauth2/callback hits
+ * from one address in a few minutes, and a sign-in that fails for everybody
+ * in the room is the worst outcome this file could produce. So an address
+ * limit is sized for a crowd and only stops a script; the per-account limits
+ * are what hold a single person to human rates.
+ */
 export const LIMITS = {
-  /** GET /login, per source. Sets a cookie and redirects; a person does this a few times a day. */
-  login: { limit: 60, window: 600 },
+  /** GET /login, per source. Sized for a lecture hall behind one NAT address. */
+  login: { limit: 600, window: 600 },
   /** GET /oauth2/callback, per source. Each one can cost a call to Google's token endpoint. */
-  callback: { limit: 60, window: 600 },
+  callback: { limit: 600, window: 600 },
   /** GET /device?code=, per account. Looking a code up is how a guesser would learn one is live. */
   deviceLookup: { limit: 60, window: 600 },
   /**
-   * POST /device/approve, per account and per source. A guessed code would
-   * enroll somebody else's Mac into the guesser's account, so this is the
-   * limit that makes guessing hopeless rather than merely unlikely.
+   * POST /device/approve, per account. A guessed code would enroll somebody
+   * else's Mac into the guesser's account, so this is the limit that makes
+   * guessing hopeless rather than merely unlikely.
    */
   deviceApprove: { limit: 30, window: 600 },
+  /**
+   * POST /device/approve, per source: the same guard for a pile of accounts
+   * on one address, sized for a class connecting their Macs together.
+   */
+  deviceApproveAddress: { limit: 300, window: 600 },
   /**
    * POST /stripe/webhook, per source, checked before the signature. Stripe
    * delivers from a handful of addresses and retries anything refused, so
