@@ -19,6 +19,7 @@
 import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { LIMITS, limitedPage, overLimit } from "./limits";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { stripeClient } from "./stripe";
@@ -58,6 +59,10 @@ async function ready(c: Context<AppEnv>) {
   // Says where a browser thinks it is, and nothing about who is asking, so it
   // is the second lock on a door browserOnly() is the first lock on.
   if (!sameOrigin(c)) return { refusal: c.text("Bad origin", 403) };
+  // Each billing route calls Stripe's API, and Stripe's own rate limit is
+  // shared by every account here.
+  const wait = await overLimit(c, `billing:${account.id}`, LIMITS.billing);
+  if (wait !== null) return { refusal: limitedPage(c, wait) };
   if (!c.env.STRIPE_SECRET_KEY) {
     console.log("billing: a billing route was reached and STRIPE_SECRET_KEY is not set");
     return { refusal: c.html(problem("Billing is not switched on yet. Nothing was charged.")) };

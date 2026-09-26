@@ -29,6 +29,7 @@ import { Hono, type Context } from "hono";
 import Stripe from "stripe";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
+import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
 import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
 
 export const stripeHooks = new Hono<AppEnv>();
@@ -70,6 +71,11 @@ stripeHooks.post("/stripe/webhook", async (c) => {
   }
   const signature = c.req.header("stripe-signature") ?? "";
   if (!signature) return c.json({ error: "missing_signature" }, 400);
+  // Before the body is read or the signature checked, so a flood costs one
+  // counter per request rather than a read and an HMAC. Lenient: Stripe
+  // retries a 429 like any other refusal (limits.ts).
+  const wait = await overLimit(c, `stripe-webhook:${clientAddress(c)}`, LIMITS.stripeWebhook);
+  if (wait !== null) return limitedJson(c, LIMITS.stripeWebhook, wait);
 
   const declared = Number(c.req.header("Content-Length") ?? 0);
   if (declared > MAX_EVENT_BYTES) return c.json({ error: "too_large", limit_bytes: MAX_EVENT_BYTES }, 413);

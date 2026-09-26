@@ -13,6 +13,8 @@
 //                          means /stripe/webhook refuses every delivery.
 //   STRIPE_SECRET_KEY      the Stripe API key. The webhook never spends it;
 //                          Checkout and the Billing Portal will.
+//   DRIVE_KEY_PREVIOUS     only during a DRIVE_KEY rotation: the key being
+//                          retired. See docs/drive-key-rotation.md.
 // For local dev, the same names go in .dev.vars, which is gitignored.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -62,5 +64,8 @@
     // while it is empty the top-up is simply not offered.
     "STRIPE_PRICE_TOPUP": ""
   },
+  // Hourly housekeeping (the scheduled handler in src/index.ts): seals Drive
+  // grants again under the current DRIVE_KEY and clears old rate-limit rows.
+  "triggers": { "crons": ["17 * * * *"] },
   "observability": { "enabled": true }
 }

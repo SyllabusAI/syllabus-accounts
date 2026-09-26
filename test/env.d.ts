@@ -7,6 +7,7 @@ declare namespace Cloudflare {
     GOOGLE_CLIENT_SECRET: string;
     SESSION_SECRET: string;
     DRIVE_KEY: string;
+    DRIVE_KEY_PREVIOUS: string;
     OPENAI_API_KEY: string;
     GROQ_API_KEY: string;
     ANTHROPIC_API_KEY: string;

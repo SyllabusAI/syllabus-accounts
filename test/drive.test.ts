@@ -177,7 +177,8 @@ describe("a panel asking for a Drive token", () => {
     const calls = google(() => ({ status: 200, body: {} }));
     const res = await postForm("/drive/disconnect", {}, { Cookie: mine.cookie });
     expect(res.status).toBe(302);
-    expect(calls[0].url).toContain("https://oauth2.googleapis.com/revoke?token=1%2F%2Frefresh-secret");
+    expect(calls[0].url).toBe("https://oauth2.googleapis.com/revoke");
+    expect(calls[0].sent.get("token")).toBe("1//refresh-secret");
     vi.unstubAllGlobals();
     expect((await postJson("/drive/token", {}, { Authorization: "Bearer " + mine.token })).status).toBe(404);
     expect((await postForm("/drive/disconnect", {}, { Cookie: mine.cookie, Origin: "https://evil.test" })).status).toBe(403);

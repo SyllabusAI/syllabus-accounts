@@ -135,8 +135,13 @@ npx wrangler secret put SESSION_SECRET
 npx wrangler secret put DRIVE_KEY
 ```
 
-Changing `DRIVE_KEY` makes every stored Drive grant unreadable; people
-would reconnect Drive from the account page.
+Replacing `DRIVE_KEY` outright would make every stored Drive grant
+unreadable. Rotate it with `DRIVE_KEY_PREVIOUS` instead, which nobody
+notices: [docs/drive-key-rotation.md](docs/drive-key-rotation.md). The
+hourly cron in `wrangler.jsonc` is what finishes a rotation.
+
+What the service protects, from whom, and how each route is authenticated:
+[docs/threat-model.md](docs/threat-model.md).
 
 The Worker's route is a custom domain, so `wrangler deploy` also creates the
 DNS record. The Google side is a **Web application** OAuth client in Google

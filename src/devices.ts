@@ -15,6 +15,7 @@
 import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { clientAddress as source, LIMITS, limitedPage, overLimit } from "./limits";
 import { approvedPage, devicePage } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
@@ -43,11 +44,6 @@ const START_WINDOW_SECONDS = 600;
 const POLL_LIMIT = 60;
 const POLL_WINDOW_SECONDS = 60;
 const PENDING_CAP = 500;
-
-/** Who is asking, as well as this can be known at the edge. */
-function source(c: Context<AppEnv>): string {
-  return c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
-}
 
 function rateLimited(c: Context<AppEnv>, limit: number, windowSeconds: number, retryAfter: number) {
   return c.json({ error: "rate_limited", limit, window_seconds: windowSeconds }, 429, {
@@ -103,6 +99,12 @@ devices.get("/device", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent(c.req.path + (c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "")));
   const code = normalizeUserCode(c.req.query("code") ?? "");
+  // Per account: a signed-in guesser learns from this page whether a code is
+  // live, so it is limited like the approval it leads to.
+  if (code) {
+    const wait = await overLimit(c, `device-lookup:${account.id}`, LIMITS.deviceLookup);
+    if (wait !== null) return limitedPage(c, wait);
+  }
   let deviceName = "";
   if (code) {
     const pending = await db.deviceCodeByUserCode(c.env.DB, code);
@@ -117,6 +119,14 @@ devices.post("/device/approve", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=/device");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
+  // A code guessed right would enroll somebody else's Mac into this account,
+  // and its notes into this account's Drive. 32^8 codes against at most
+  // PENDING_CAP live ones is already long odds; these make it hopeless, per
+  // account and per address, so a pile of accounts on one address gains nothing.
+  for (const bucket of [`device-approve:${account.id}`, `device-approve-ip:${source(c)}`]) {
+    const wait = await overLimit(c, bucket, LIMITS.deviceApprove);
+    if (wait !== null) return limitedPage(c, wait);
+  }
   const form = await c.req.parseBody();
   const typed = String(form.user_code ?? "");
   const code = normalizeUserCode(typed);
