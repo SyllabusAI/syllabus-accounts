@@ -1,5 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { serializeSigned } from "hono/utils/cookie";
+import { vi } from "vitest";
 import { upsertAccount } from "../src/db";
 import type { AllowanceGrant } from "../src/tiers";
 import { SESSION_COOKIE } from "../src/session";
@@ -74,4 +75,35 @@ export async function claimDevice(email: string, name = "Test Mac") {
 /** An allowance row for a test, in the shape src/tiers.ts produces. */
 export function grant(audioSeconds: number, summaryTokens: number, source = "test"): AllowanceGrant {
   return { audio_seconds: audioSeconds, summary_tokens: summaryTokens, assistant_sessions: 0, source };
+}
+
+/**
+ * Stop the clock for a test that counts requests against a fixed rate-limit
+ * window, and return the instant it stopped at.
+ *
+ * Those windows start on the minute (src/db.ts hitRateLimit). A test that
+ * sends 22 or 72 requests takes well under a second here and up to five on a
+ * slow CI runner, and one that crosses a window boundary halfway sees its
+ * count reset and fails for no reason in the code. Only Date is faked, so
+ * timers, fetch and the Durable Objects run as usual; the Worker runs in this
+ * isolate and reads the same Date.
+ *
+ * It stops on the last millisecond before a window boundary on purpose: the
+ * worst moment to run such a test on a real clock, so a test that passes here
+ * proves the Worker is reading the frozen clock and not the wall. Undo it with
+ * vi.useRealTimers() in afterEach.
+ */
+export function freezeClockJustBeforeAWindowEnds(): number {
+  const at = Math.floor(Date.now() / 3_600_000) * 3_600_000 - 1;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(at);
+  return at;
+}
+
+/** The fixed windows a rate-limit bucket has counted in, as hitRateLimit keys them. */
+export async function rateLimitWindows(bucket: string): Promise<number[]> {
+  const { results } = await env.DB.prepare("SELECT window_start FROM rate_limits WHERE bucket = ? ORDER BY window_start")
+    .bind(bucket)
+    .all<{ window_start: number }>();
+  return results.map((r) => r.window_start);
 }
