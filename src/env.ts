@@ -4,6 +4,30 @@ export type Bindings = {
   PANEL: DurableObjectNamespace;
   /** Where this Worker is published, no trailing slash. */
   PUBLIC_URL: string;
+  /**
+   * OPTIONAL: the separate origin relayed panels are served from, e.g.
+   * https://panels.example.com, no trailing slash. See src/panel-host.ts.
+   *
+   * A panel page is HTML written by whoever holds a device token, with inline
+   * scripts. Served under PUBLIC_URL it is same-origin with the account pages,
+   * so its script could read them and post their forms with a correct Origin.
+   * On its own origin it cannot.
+   *
+   * Empty or unset means panels stay at PUBLIC_URL/p/<device>/, exactly as
+   * before, so this deploys safely before the panel host exists. Set it only
+   * after the host routes to this Worker (a Cloudflare custom domain or route),
+   * or every panel link lands on a host that does not answer.
+   *
+   * Prefer a different registrable domain from PUBLIC_URL's (a dedicated
+   * domain, or this Worker's workers.dev address). A subdomain of the same
+   * site is a different ORIGIN, which is what stops the reading and the
+   * posting, but it is still the same SITE: SameSite=Lax cookies travel
+   * between the two, and a script on one can set a Domain= cookie the other
+   * receives. The session cookie is host-only (no Domain attribute) so it never
+   * reaches the panel host, and a duplicated one reads as signed out
+   * (session.ts), but a separate site takes the whole question away.
+   */
+  PANEL_ORIGIN?: string;
   /** The Web OAuth client in Google Cloud project friendly-bazaar-507320-b7. */
   GOOGLE_CLIENT_ID: string;
   /** Secret: the Web client's secret. `wrangler secret put GOOGLE_CLIENT_SECRET`. */

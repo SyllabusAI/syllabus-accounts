@@ -16,9 +16,10 @@ import { Hono } from "hono";
 import { account } from "./account";
 import * as db from "./db";
 import { devices, TOKEN_IDLE_DAYS, tokenStanding } from "./devices";
-import type { AppEnv } from "./env";
+import type { AppEnv, Bindings } from "./env";
 import { google } from "./google";
 import { accountPage, landing, privacyPage, termsPage } from "./pages";
+import { panelHost, panelOrigin } from "./panel-host";
 import { proxy } from "./proxy";
 import { panelUrl, relay, relayState } from "./relay";
 import { billing, billingView } from "./billing";
@@ -26,7 +27,6 @@ import { settings } from "./settings";
 import { stripeHooks } from "./stripe";
 import { drive } from "./drive";
 import { sweepDriveGrants } from "./drive-keys";
-import type { Bindings } from "./env";
 import { bodyCap, securityHeaders } from "./headers";
 import { sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
@@ -170,6 +170,21 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
   );
 }
 
-export default { fetch: app.fetch, scheduled } satisfies ExportedHandler<Bindings>;
+/**
+ * Which app answers is decided by the host asked, before anything else runs.
+ *
+ * With PANEL_ORIGIN set, a request to that host is the panel host's
+ * (panel-host.ts) and never reaches a route above: no account page, no
+ * billing form, no device route, no session or bearer middleware. Every
+ * other host is this app, as it always was. Unset, nothing here changes.
+ */
+export default {
+  fetch(request: Request, env: Bindings, ctx: ExecutionContext) {
+    const panel = panelOrigin(env);
+    if (panel && new URL(request.url).origin === panel) return panelHost.fetch(request, env, ctx);
+    return app.fetch(request, env, ctx);
+  },
+  scheduled,
+} satisfies ExportedHandler<Bindings>;
 // The Durable Object class has to be exported from the entry module.
 export { PanelRelay } from "./panel-relay";

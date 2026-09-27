@@ -14,6 +14,8 @@
  *   to the panel     {t:"req", id, method, path, query, headers, viewer:{email, account_id}, base, body}
  *   from the panel   {t:"res", id, status, headers, body, more?}   then   {t:"chunk", id, body, more?}
  *                    {t:"hello", name?, version?}   once, on connect; informational
+ *   to the panel     {t:"welcome", device, chunk_bytes, max_response_bytes, timeout_ms, panel_url}
+ *                    once, on connect; panel_url is the address to show people
  *
  * Bodies are base64. A message may not exceed 1 MiB on Cloudflare, so the
  * panel splits a long response into chunks; the whole is capped here.
@@ -46,7 +48,8 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Bindings } from "./env";
 import { panelNotConnectedPage } from "./pages";
-import { fromBase64, now, randomId, toBase64 } from "./util";
+import { panelOrigin } from "./panel-host";
+import { fromBase64, now, panelUrl, randomId, toBase64 } from "./util";
 import { log } from "./log";
 
 /** How long a relayed request may wait for the panel before it is a 504 and the socket is presumed dead. */
@@ -88,7 +91,15 @@ export type ReqFrame = {
 export type ResFrame = { t: "res"; id: string; status: number; headers?: Record<string, string>; body?: string; more?: boolean };
 export type ChunkFrame = { t: "chunk"; id: string; body?: string; more?: boolean };
 export type HelloFrame = { t: "hello"; name?: string; version?: string };
-export type WelcomeFrame = { t: "welcome"; device: string; chunk_bytes: number; max_response_bytes: number; timeout_ms: number };
+export type WelcomeFrame = {
+  t: "welcome";
+  device: string;
+  chunk_bytes: number;
+  max_response_bytes: number;
+  timeout_ms: number;
+  /** Where a browser reaches this panel: on PANEL_ORIGIN when that is set, else on PUBLIC_URL. */
+  panel_url: string;
+};
 
 type Pending = {
   status: number;
@@ -210,6 +221,7 @@ export class PanelRelay extends DurableObject<Bindings> {
       chunk_bytes: CHUNK_BYTES,
       max_response_bytes: MAX_RESPONSE_BYTES,
       timeout_ms: REQUEST_TIMEOUT_MS,
+      panel_url: panelUrl(panelOrigin(this.env) || this.env.PUBLIC_URL, deviceId),
     };
     server.send(JSON.stringify(welcome));
     return new Response(null, { status: 101, webSocket: client });
