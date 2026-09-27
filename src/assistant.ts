@@ -87,6 +87,27 @@ export const RATES = { input: 2, output: 10, cache_write: 2.5, cache_read: 0.2 }
 /** Room for a study guide across several lectures, as on the Mac. */
 const MAX_OUTPUT_TOKENS = 8000;
 
+/**
+ * Thinking is off for now, and said so explicitly: Sonnet 5 thinks
+ * adaptively when the request leaves `thinking` out, thinking tokens bill as
+ * output and count against MAX_OUTPUT_TOKENS, and neither the HOME-STRETCH
+ * session price nor estimateOf() was costed with them.
+ *
+ * To turn it on, set this to "adaptive" (the only on-mode Sonnet 5 accepts;
+ * budget_tokens is refused with a 400) and re-cost first: raise
+ * MAX_OUTPUT_TOKENS so thinking does not crowd out the answer, then check
+ * SESSION_COST_CAP and the Pro session price against a few real sessions'
+ * `output_tokens`. Everything else is already in place: the stream parser
+ * keeps thinking and redacted_thinking blocks with their signatures, and a
+ * continuation hands them back unchanged, as the API requires.
+ */
+export const ASSISTANT_THINKING: "disabled" | "adaptive" = "disabled";
+
+/** The request's `thinking` field for a mode. "omitted" display: the panel never shows reasoning. */
+export function thinkingParam(mode: "disabled" | "adaptive" = ASSISTANT_THINKING) {
+  return mode === "adaptive" ? ({ type: "adaptive", display: "omitted" } as const) : ({ type: "disabled" } as const);
+}
+
 const FETCH_TOOL_NAME = "fetch_transcripts";
 
 /** At most this many transcripts on one escalation, as on the Mac. */
@@ -476,6 +497,7 @@ function upstreamBody(asked: Asked) {
   return {
     model: ASSISTANT_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
+    thinking: thinkingParam(),
     stream: true,
     system: SYSTEM_PROMPT,
     tools: [FETCH_TOOL],
