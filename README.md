@@ -104,6 +104,46 @@ than hanging. The object hibernates between messages; the panel's pings are
 answered without waking it. The Durable Object class is SQLite-backed
 (`new_sqlite_classes` in `wrangler.jsonc`), which every Workers plan allows.
 
+### The panel host (`PANEL_ORIGIN`)
+
+A panel page is HTML the Mac wrote, with inline scripts, and anybody holding
+that Mac's device token can be the Mac. Served under `PUBLIC_URL` it is
+same-origin with the account pages, so its script could read `/`, post
+`/device/approve`, `/devices/:id/revoke`, `/drive/disconnect` or the billing
+forms with a correct `Origin`, and `browserOnly()` plus `sameOrigin()` would
+let it. `PANEL_ORIGIN` moves panels to an origin of their own
+(`src/panel-host.ts`):
+
+```
+browser -> PUBLIC_URL/p/<d>/setup            signed in, owns <d>
+        <- 302 PANEL_ORIGIN/p/<d>/_auth?t=<ticket>   (60 s, single use, HMAC, account + device)
+browser -> PANEL_ORIGIN/p/<d>/_auth?t=...    ticket checked and spent (D1 panel_tickets)
+        <- 302 /p/<d>/setup  + Set-Cookie syllabus_panel; Path=/p/<d>/; HttpOnly; Secure; SameSite=Lax
+browser -> PANEL_ORIGIN/p/<d>/setup          relayed, viewer named from the panel cookie
+```
+
+The panel host answers `/p/...` and nothing else: every account, billing,
+device and relay route is a 404 there, and bearer tokens are not read. The
+account host never serves panel content once it is set, and `sameOrigin()`
+refuses anything from the panel host. The session cookie is host-only, so it
+never reaches the panel host. The welcome frame tells the Mac its
+`panel_url`, on the panel host.
+
+Unset (the default), nothing changes. To turn it on:
+
+1. Give a host to this Worker in Cloudflare: a Custom Domain (Workers ->
+   syllabus-accounts -> Settings -> Domains & Routes), or a route on a zone
+   you already have. Prefer a different registrable domain from
+   `PUBLIC_URL`'s; a sibling subdomain works but stays same-site, see
+   `PANEL_ORIGIN` in `src/env.ts`. It may not be `PUBLIC_URL`'s host, a
+   parent of it, or a subdomain of it; those are refused and nothing is
+   relayed until fixed.
+2. Check that `curl -si https://<panel host>/p/x/` is answered by this
+   Worker (a 302 to `PUBLIC_URL`).
+3. Set `"PANEL_ORIGIN": "https://<panel host>"` in `wrangler.jsonc`, run
+   `npm run types`, and merge. Old `PUBLIC_URL/p/<d>/` links keep working:
+   they hand over to the panel host.
+
 ## Running it
 
 ```bash

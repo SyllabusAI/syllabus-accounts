@@ -2,7 +2,9 @@
  * The browser session: a signed cookie naming the account, good for 30 days.
  *
  * The cookie holds nothing but the account id and when it was issued, signed
- * with SESSION_SECRET. Nothing is stored server-side per session, so signing
+ * with SESSION_SECRET. It is host-only: no Domain attribute, ever, so it is
+ * sent to PUBLIC_URL's host and to no other, including a panel host on a
+ * subdomain (panel-host.ts). Nothing is stored server-side per session, so signing
  * out everywhere is a matter of rotating the secret.
  */
 
@@ -10,6 +12,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { accountById } from "./db";
 import type { AppEnv } from "./env";
+import { countCookie, panelOrigin } from "./panel-host";
 
 export const SESSION_COOKIE = "syllabus_accounts_session";
 export const SESSION_DAYS = 30;
@@ -33,6 +36,12 @@ export function clearSession(c: Context<AppEnv>): void {
 
 /** The account id a valid, unexpired session cookie names, or "". */
 export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
+  // setSession() writes one host-only cookie, and a browser holding it sends
+  // it once. A second one of the same name was set by some other host of
+  // this site with a Domain attribute (a panel host that is a sibling
+  // subdomain, say, running the panel's own scripts), and which of the two a
+  // parser picks is not ours to decide. Neither is trusted.
+  if (countCookie(c.req.header("Cookie") ?? "", SESSION_COOKIE) > 1) return "";
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!raw) return "";
   try {
@@ -69,8 +78,12 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
  */
 export function sameOrigin(c: Context<AppEnv>): boolean {
   const origin = c.req.header("Origin") ?? "";
-  if (origin) return origin === c.env.PUBLIC_URL;
   const referer = c.req.header("Referer") ?? "";
+  // The panel host serves pages anyone with a device token wrote. Nothing
+  // from it is ever a form of ours, whatever else the comparison below says.
+  const panel = panelOrigin(c.env);
+  if (panel && (origin === panel || referer.startsWith(panel + "/"))) return false;
+  if (origin) return origin === c.env.PUBLIC_URL;
   return referer.startsWith(c.env.PUBLIC_URL + "/");
 }
 
