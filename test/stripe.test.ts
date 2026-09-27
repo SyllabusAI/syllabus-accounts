@@ -215,7 +215,7 @@ type Call = { method: string; path: string; body: string };
  * `status` is what Stripe says each subscription is now; `failCancel` makes a
  * cancel fail the way a Stripe error does.
  */
-function stripeApi(opts: { status?: Record<string, string>; failCancel?: boolean } = {}) {
+function stripeApi(opts: { status?: Record<string, string>; failCancel?: boolean; price?: Record<string, string> } = {}) {
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -231,7 +231,10 @@ function stripeApi(opts: { status?: Record<string, string>; failCancel?: boolean
       if (sub && method === "GET") {
         const status = opts.status?.[sub[1]];
         if (!status) return json(404, { error: { type: "invalid_request_error", code: "resource_missing", message: "No such subscription" } });
-        return json(200, { id: sub[1], object: "subscription", status, customer: "cus_orphan" });
+        // A Syllabus price unless the test says otherwise (vitest.config.ts binds price_test_*).
+        const price = opts.price?.[sub[1]] ?? "price_test_standard";
+        const items = { object: "list", data: [{ id: "si_1", object: "subscription_item", price: { id: price, object: "price" } }] };
+        return json(200, { id: sub[1], object: "subscription", status, customer: "cus_orphan", items });
       }
       if (sub && method === "DELETE") {
         if (opts.failCancel) return json(400, { error: { type: "invalid_request_error", message: "Stripe says no" } });
@@ -399,11 +402,41 @@ describe("an account that was deleted", () => {
       subscription: null,
       customer: "cus_topup_after",
       client_reference_id: "an-account-deleted-before-topping-up",
+      metadata: { account_id: "an-account-deleted-before-topping-up", kind: "topup" },
     });
     expect((await deliver(event)).status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0].path).toBe("/v1/refunds");
     expect(new URLSearchParams(calls[0].body).get("payment_intent")).toBe("pi_after_deletion");
+  });
+
+  it("never refunds a payment this service's Checkout did not make", async () => {
+    // Another product on the same Stripe account, with a client_reference_id
+    // of its own that means nothing here.
+    const calls = stripeApi();
+    const event = checkoutEvent({
+      id: "cs_someone_elses",
+      mode: "payment",
+      payment_status: "paid",
+      payment_intent: "pi_someone_elses",
+      subscription: null,
+      customer: "cus_someone_elses",
+      client_reference_id: "order-4411",
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls).toEqual([]);
+  });
+
+  it("never cancels a subscription to a price that is not Syllabus's", async () => {
+    const calls = stripeApi({ status: { sub_other_product: "active" }, price: { sub_other_product: "price_another_product" } });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_other_product",
+      customer: "cus_other_product",
+      status: "active",
+      metadata: { account_id: "not-an-account-here" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/subscriptions/sub_other_product"]);
   });
 });
 

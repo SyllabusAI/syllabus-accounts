@@ -171,7 +171,11 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       // goes back here, once per session however often this is delivered. A
       // subscription is ended here and by its own events below, whichever
       // lands first.
-      if (session.mode === "payment" && session.payment_status === "paid") {
+      //
+      // Only a top-up this Worker's Checkout made (metadata.kind, which
+      // /billing/topup stamps): anything else paid on the same Stripe account
+      // is some other product's money and is none of this service's business.
+      if (session.mode === "payment" && session.payment_status === "paid" && session.metadata?.kind === "topup") {
         const intent = idOf(session.payment_intent as string | { id?: string } | null);
         if (intent) {
           await stripeClient(c.env).refunds.create({ payment_intent: intent }, { idempotencyKey: `orphan-topup:${session.id}` });
@@ -473,7 +477,11 @@ export async function deleteCustomer(stripe: Stripe, id: string): Promise<boolea
  * customer are logged rather than retried, because by then nobody is being
  * charged.
  */
-async function endOrphan(env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">, subscriptionId: string, customerId: string): Promise<void> {
+async function endOrphan(
+  env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY" | "STRIPE_PRICE_STARTER" | "STRIPE_PRICE_STANDARD" | "STRIPE_PRICE_PRO">,
+  subscriptionId: string,
+  customerId: string,
+): Promise<void> {
   const stripe = stripeClient(env);
   let current: Stripe.Subscription;
   try {
@@ -484,6 +492,15 @@ async function endOrphan(env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">, subscr
   }
   // Already over: the deletion canceled it, and deleted the customer with it.
   if (!isLive(current.status)) return;
+  // Only a subscription to one of this service's prices. The account id it
+  // names is only a stamp, and anything sharing this Stripe account could
+  // carry one; canceling and refunding it on that alone would end somebody
+  // else's product.
+  const ours = (current.items?.data ?? []).some((item) => tierForPrice(env, item.price?.id ?? "") !== null);
+  if (!ours) {
+    console.log(`stripe: ${subscriptionId} names a deleted account but is not a Syllabus price; left alone`);
+    return;
+  }
   const ended = await endSubscription(stripe, subscriptionId);
   console.log(
     `stripe: canceled ${subscriptionId}, which started after its account was deleted` +
