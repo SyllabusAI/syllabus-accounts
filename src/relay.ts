@@ -47,6 +47,16 @@ export async function relayState(env: Bindings, deviceId: string): Promise<Relay
   return (await res.json()) as RelayState & { connected: boolean };
 }
 
+/**
+ * Drop a device's panel socket and everything its relay object remembers.
+ * For deleting an account; see forget() in panel-relay.ts.
+ */
+export async function forgetRelay(env: Bindings, deviceId: string): Promise<void> {
+  const stub = env.PANEL.get(env.PANEL.idFromName(deviceId));
+  const res = await stub.fetch("https://panel-relay/", { method: "POST", headers: { "X-Relay-Op": "forget" } });
+  if (!res.ok) throw new Error(`relay object answered ${res.status}`);
+}
+
 export const relay = new Hono<AppEnv>();
 
 relay.get("/relay/connect", async (c) => {

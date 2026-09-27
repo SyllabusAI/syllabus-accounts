@@ -18,10 +18,10 @@
 
 import { Hono, type Context } from "hono";
 import * as db from "./db";
-import type { AppEnv } from "./env";
+import type { AppEnv, Bindings } from "./env";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
-import { stripeClient } from "./stripe";
+import { deleteCustomer, endSubscription, isLive, missing, stripeClient } from "./stripe";
 import { entitlingSubscription, type TierName } from "./tiers";
 import { log } from "./log";
 
@@ -91,6 +91,19 @@ billing.post("/billing/checkout", async (c) => {
    * subscription is free from the first day.
    */
   const redeeming = String(form.get("redeem") ?? "") === "1";
+  /**
+   * The Stripe trial is given once. Somebody whose free trial was spent on an
+   * account they since deleted (migrations/0013) starts paying on day one,
+   * and so does anybody who has held a subscription here before: canceling a
+   * trialing subscription and starting another would otherwise be five free
+   * hours on demand, which is exactly what the deletion block is closing.
+   */
+  const [row, earlier] = await Promise.all([
+    db.allowance(c.env.DB, account!.id),
+    db.subscriptionsOf(c.env.DB, account!.id),
+  ]);
+  const trialSpent = row?.source === "trial_used" || earlier.length > 0;
+  const withTrial = !redeeming && !trialSpent;
 
   // A customer we already have keeps one person to one Stripe customer, so
   // their invoices and their card stay in one place across a resubscription.
@@ -107,7 +120,7 @@ billing.post("/billing/checkout", async (c) => {
       client_reference_id: account!.id,
       subscription_data: {
         metadata: { account_id: account!.id },
-        ...(redeeming ? {} : { trial_period_days: TRIAL_PERIOD_DAYS }),
+        ...(withTrial ? { trial_period_days: TRIAL_PERIOD_DAYS } : {}),
       },
       ...(customer ? { customer, customer_update: { address: "auto", name: "auto" } } : { customer_email: account!.email }),
       // Texas taxes this as a data processing service, so an address has to be
@@ -230,4 +243,83 @@ export async function billingView(c: Context<AppEnv>, accountId: string): Promis
     toppedUp: extra.audio_seconds,
     canTopUp: Boolean(c.env.STRIPE_PRICE_TOPUP),
   };
+}
+
+/** What leaving Stripe came to, for the log and for the page that follows. */
+export type StripeExit = {
+  canceled: number;
+  /** Refunded to cards, in the smallest currency unit. */
+  refunded: number;
+  /** A refund was owed and did not go through; the log has what to issue by hand. */
+  refundFailed: boolean;
+};
+
+/**
+ * Leave Stripe, for an account that is being deleted: cancel every
+ * subscription now, refund the unused time, then delete every customer.
+ *
+ * "Now" and not "at the end of the period", because there is no account left
+ * to spend the rest of the month on; the unused share goes back to the card
+ * instead (endSubscription in stripe.ts).
+ *
+ * Stripe is asked, not just the mirror. The mirror only knows what the
+ * webhook managed to deliver, and a subscription whose `created` event never
+ * landed would otherwise go on charging a card for an account that no longer
+ * exists. So every customer the account is linked to, from either table, is
+ * listed at Stripe, and anything live there or in the mirror is canceled. A
+ * subscription or customer Stripe says does not exist is already the outcome
+ * wanted and is not an error.
+ *
+ * Throws if listing or canceling fails, before anything else is touched, so
+ * the caller can stop without deleting: the one failure worth refusing a
+ * deletion over is one that leaves somebody paying. A refund or a customer
+ * deletion that fails does not throw, because by then nobody is being
+ * charged; each is logged with Stripe's ids to finish from the dashboard.
+ * Deleting the customer removes the saved card and contact details; Stripe
+ * keeps the invoices and payments for its own records. An account that never
+ * reached Checkout makes no Stripe call at all.
+ */
+export async function leaveStripe(
+  env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">,
+  accountId: string,
+): Promise<StripeExit> {
+  const exit: StripeExit = { canceled: 0, refunded: 0, refundFailed: false };
+  const mirrored = await db.subscriptionsOf(env.DB, accountId);
+  const customers = new Set(mirrored.map((s) => s.stripe_customer_id).filter(Boolean));
+  for (const id of await db.stripeCustomersOf(env.DB, accountId)) customers.add(id);
+  const live = new Set(mirrored.filter((s) => isLive(s.status)).map((s) => s.stripe_subscription_id));
+  if (!customers.size && !live.size) return exit;
+  if (!env.STRIPE_SECRET_KEY) {
+    // Nothing can be asked of Stripe. With a live subscription on record that
+    // is a refusal; with none, there is nothing we know of to cancel.
+    if (live.size) throw new Error("STRIPE_SECRET_KEY is not set, and a subscription is live");
+    return exit;
+  }
+
+  const stripe = stripeClient(env);
+  for (const customer of customers) {
+    try {
+      for await (const sub of stripe.subscriptions.list({ customer, status: "all", limit: 100 })) {
+        // Stripe is the truth here; a mirror row it contradicts is stale.
+        if (isLive(sub.status)) live.add(sub.id);
+        else live.delete(sub.id);
+      }
+    } catch (err) {
+      if (!missing(err)) throw err;
+    }
+  }
+  for (const id of live) {
+    const ended = await endSubscription(stripe, id);
+    if (ended.canceled) exit.canceled += 1;
+    exit.refunded += ended.refunded;
+    exit.refundFailed ||= ended.refundFailed;
+  }
+  for (const customer of customers) {
+    try {
+      await deleteCustomer(stripe, customer);
+    } catch (err) {
+      log(`stripe: customer ${customer} of deleted account ${accountId} was not deleted; delete it by hand: ${(err as Error).message}`);
+    }
+  }
+  return exit;
 }

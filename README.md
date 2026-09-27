@@ -24,6 +24,31 @@ their Google Drive grant.
 - **Reach a panel over the web.** `/p/<device>/` relays a signed-in
   browser to that Mac's panel over a Durable Object socket, when the account
   owns it. Anyone else is told the panel is not theirs.
+- **Delete the account.** `/account/delete` (signed in with Google within the
+  last 10 minutes, or it asks you to sign in again) says what goes and asks
+  for the account's email typed back. The `POST` cancels any live Stripe
+  subscription first, and deletes nothing if Stripe cannot do that. It refunds
+  the unused share of the latest paid invoice to the card and deletes every
+  linked Stripe customer (the saved card and contact details; Stripe keeps its
+  own invoices and payments). A refund or customer deletion that fails does not
+  stop the deletion; it is logged with Stripe's ids (`REFUND OWED` for a
+  refund) to finish from the dashboard. Then it deletes every row that names
+  the account in one D1 transaction (so every device token dies with it),
+  revokes the Drive grant at Google, drops each Mac's relay socket, and signs
+  the browser out. Two things stay: `stripe_events`
+  rows with the account id blanked, so a redelivered webhook is still
+  recognized, and one row in `trial_used`, a keyed HMAC of the Google `sub`
+  (never the sub or the email). Signing in again with the same Google account
+  starts a new, empty account with no free trial: it gets an allowance row of
+  zeros (`source = 'trial_used'`) instead of the trial a missing row means,
+  and Checkout starts its plan without a Stripe trial. Paid plans work as for
+  anybody else. An account that has held a subscription before gets no second
+  Stripe trial either, so canceling and subscribing again is not a way around it.
+  A Checkout that was open in another tab and finishes after the deletion
+  starts a subscription for an account that is gone; the webhook sees the
+  stamped account is missing, cancels and refunds that subscription, and
+  deletes its customer unless a live account still uses it. A top-up paid
+  that way is refunded in full.
 
 ## The device flow
 
@@ -264,6 +289,12 @@ records every webhook event id so a retried delivery is handled once, and
 `stripe_customers` is which account a Stripe customer is. None of them carries
 a card number or anything else about a payment method; Stripe holds all of
 that.
+
+`trial_used` holds one row per deleted account whose Google identity must not
+get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
+from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
+forgets it, which gives those people a trial again rather than locking anybody
+out.
 
 The Worker's logs are not the database, and they hold less. Cloudflare keeps
 them (Workers Logs, `wrangler tail`, any Logpush job) and anyone with

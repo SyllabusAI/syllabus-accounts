@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
 import { TRIAL_ALLOWANCE } from "../src/proxy";
 import { TIERS } from "../src/tiers";
@@ -204,6 +204,242 @@ describe("an event is handled once", () => {
   });
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+type Call = { method: string; path: string; body: string };
+
+/**
+ * Stripe's API, scripted, for the one case where the webhook calls it back.
+ * `status` is what Stripe says each subscription is now; `failCancel` makes a
+ * cancel fail the way a Stripe error does.
+ */
+function stripeApi(opts: { status?: Record<string, string>; failCancel?: boolean; price?: Record<string, string> } = {}) {
+  const calls: Call[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const u = new URL(String(input instanceof Request ? input.url : input));
+      const method = (init.method ?? "GET").toUpperCase();
+      calls.push({ method, path: u.pathname, body: typeof init.body === "string" ? init.body : "" });
+      const json = (code: number, payload: unknown) =>
+        new Response(JSON.stringify(payload), { status: code, headers: { "Content-Type": "application/json" } });
+      if (u.hostname !== "api.stripe.com") throw new Error(`unexpected fetch: ${method} ${u}`);
+      const sub = u.pathname.match(/^\/v1\/subscriptions\/([^/]+)$/);
+      const now = Math.floor(Date.now() / 1000);
+      if (sub && method === "GET") {
+        const status = opts.status?.[sub[1]];
+        if (!status) return json(404, { error: { type: "invalid_request_error", code: "resource_missing", message: "No such subscription" } });
+        // A Syllabus price unless the test says otherwise (vitest.config.ts binds price_test_*).
+        const price = opts.price?.[sub[1]] ?? "price_test_standard";
+        const items = { object: "list", data: [{ id: "si_1", object: "subscription_item", price: { id: price, object: "price" } }] };
+        return json(200, { id: sub[1], object: "subscription", status, customer: "cus_orphan", items });
+      }
+      if (sub && method === "DELETE") {
+        if (opts.failCancel) return json(400, { error: { type: "invalid_request_error", message: "Stripe says no" } });
+        // Paid today with no trial (a trial_used account), so nearly all of it is unused.
+        const invoice = {
+          id: "in_orphan",
+          object: "invoice",
+          status: "paid",
+          amount_paid: 1500,
+          currency: "usd",
+          lines: { object: "list", data: [{ period: { start: now - 60, end: now + 30 * 24 * 3600 - 60 } }] },
+        };
+        return json(200, { id: sub[1], object: "subscription", status: "canceled", customer: "cus_orphan", latest_invoice: invoice });
+      }
+      if (u.pathname === "/v1/invoice_payments") {
+        const data = [{ object: "invoice_payment", status: "paid", amount_paid: 1500, payment: { type: "payment_intent", payment_intent: "pi_orphan" } }];
+        return json(200, { object: "list", data, has_more: false, url: "/v1/invoice_payments" });
+      }
+      if (u.pathname === "/v1/refunds" && method === "POST") return json(200, { id: "re_orphan", object: "refund" });
+      const customer = u.pathname.match(/^\/v1\/customers\/([^/]+)$/);
+      if (customer && method === "DELETE") return json(200, { id: customer[1], object: "customer", deleted: true });
+      throw new Error(`unexpected fetch: ${method} ${u}`);
+    }),
+  );
+  return calls;
+}
+
+const did = (calls: Call[], method: string, prefix: string) =>
+  calls.filter((c) => c.method === method && c.path.startsWith(prefix)).map((c) => c.path.split("/").pop());
+
+describe("an account that was deleted", () => {
+  it("has its subscription events accepted rather than retried for days", async () => {
+    // Deleting an account cancels its subscription at Stripe, which sends
+    // customer.subscription.deleted for an account that is no longer here.
+    // Checkout stamped the id, so there is no doubt whose it was, and it will
+    // never exist again: retrying would only fill Stripe's failure log.
+    const event = subscriptionEvent("customer.subscription.deleted", {
+      id: "sub_deleted_account",
+      customer: "cus_deleted_account",
+      status: "canceled",
+      metadata: { account_id: "an-account-that-was-deleted" },
+    });
+    const calls = stripeApi();
+    const res = await deliver(event);
+    expect(res.status).toBe(200);
+    expect(await db.subscriptionById(env.DB, "sub_deleted_account")).toBeNull();
+    // Already canceled: nothing to call Stripe about.
+    expect(calls).toEqual([]);
+  });
+
+  it("cancels, refunds and forgets a subscription that started after the deletion", async () => {
+    // Checkout was open in another tab when the account was deleted, and the
+    // person paid afterwards. Nobody is left to cancel it from the account page.
+    const calls = stripeApi({ status: { sub_orphan: "active" } });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_orphan",
+      customer: "cus_orphan",
+      status: "active",
+      metadata: { account_id: "deleted-while-checkout-was-open" },
+    });
+    const res = await deliver(event);
+    expect(res.status).toBe(200);
+    expect(did(calls, "DELETE", "/v1/subscriptions/")).toEqual(["sub_orphan"]);
+    const refund = new URLSearchParams(calls.find((c) => c.path === "/v1/refunds")!.body);
+    expect(refund.get("payment_intent")).toBe("pi_orphan");
+    // Paid a minute ago: essentially the whole month comes back.
+    expect(Number(refund.get("amount"))).toBeGreaterThanOrEqual(1499);
+    expect(did(calls, "DELETE", "/v1/customers/")).toEqual(["cus_orphan"]);
+    expect(await db.subscriptionById(env.DB, "sub_orphan")).toBeNull();
+  });
+
+  it("cancels the subscription a checkout session started for a deleted account", async () => {
+    const calls = stripeApi({ status: { sub_from_session: "trialing" } });
+    const res = await deliver(
+      checkoutEvent({ customer: "cus_orphan", subscription: "sub_from_session", client_reference_id: "deleted-mid-checkout" }),
+    );
+    expect(res.status).toBe(200);
+    expect(did(calls, "DELETE", "/v1/subscriptions/")).toEqual(["sub_from_session"]);
+    expect(await db.accountIdForLinkedCustomer(env.DB, "cus_orphan")).toBeNull();
+  });
+
+  it("leaves a customer alone that a live account still uses", async () => {
+    const { account } = await signedInAs("still-here@example.com");
+    await db.linkStripeCustomer(env.DB, "cus_shared", account.id);
+    const calls = stripeApi({ status: { sub_other: "active" } });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_other",
+      customer: "cus_shared",
+      status: "active",
+      metadata: { account_id: "some-deleted-account" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(did(calls, "DELETE", "/v1/subscriptions/")).toEqual(["sub_other"]);
+    expect(did(calls, "DELETE", "/v1/customers/")).toEqual([]);
+  });
+
+  it("is retried when Stripe will not cancel, so the card is not left charging", async () => {
+    const calls = stripeApi({ status: { sub_stuck: "active" }, failCancel: true });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_stuck",
+      customer: "cus_orphan",
+      status: "active",
+      metadata: { account_id: "deleted-account" },
+    });
+    expect((await deliver(event)).status).toBe(500);
+    // The claim was released, so Stripe's retry does the work.
+    const claimed = await env.DB.prepare("SELECT id FROM stripe_events WHERE id = ?").bind(event.id).first();
+    expect(claimed).toBeNull();
+    expect(did(calls, "DELETE", "/v1/customers/")).toEqual([]);
+  });
+
+  it("cancels a subscription that STARTED after its account was deleted", async () => {
+    // A Checkout tab left open and paid after the deletion. Nothing else
+    // would ever stop this charging the card every month.
+    const calls = stripeApi({ status: { sub_after_deletion: "active" } });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_after_deletion",
+      customer: "cus_after_deletion",
+      status: "active",
+      metadata: { account_id: "an-account-deleted-before-checkout-finished" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    // Asked first, then canceled; the refund and the customer follow.
+    expect(calls.slice(0, 2).map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/subscriptions/sub_after_deletion",
+      "DELETE /v1/subscriptions/sub_after_deletion",
+    ]);
+    expect(await db.subscriptionById(env.DB, "sub_after_deletion")).toBeNull();
+  });
+
+  it("has Stripe retry when that cancellation fails, rather than accepting a live orphan", async () => {
+    stripeApi({ status: { sub_orphan_retry: "trialing" }, failCancel: true });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_orphan_retry",
+      customer: "cus_orphan_retry",
+      status: "trialing",
+      metadata: { account_id: "an-account-deleted-and-stripe-down" },
+    });
+    expect((await deliver(event)).status).toBe(500);
+    vi.unstubAllGlobals();
+    // The claim was released, so the redelivery does the work.
+    const calls = stripeApi({ status: { sub_orphan_retry: "trialing" } });
+    expect((await deliver(event)).status).toBe(200);
+    expect(did(calls, "DELETE", "/v1/subscriptions/")).toEqual(["sub_orphan_retry"]);
+  });
+
+  it("does not try to cancel again when a stale event arrives for a subscription the deletion canceled", async () => {
+    const calls = stripeApi({ status: { sub_already_canceled: "canceled" } });
+    const event = subscriptionEvent("customer.subscription.updated", {
+      id: "sub_already_canceled",
+      status: "active",
+      metadata: { account_id: "an-account-whose-deletion-canceled-this" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/subscriptions/sub_already_canceled"]);
+  });
+
+  it("refunds a top-up paid after its account was deleted", async () => {
+    const calls = stripeApi();
+    const event = checkoutEvent({
+      id: "cs_topup_after_deletion",
+      mode: "payment",
+      payment_status: "paid",
+      payment_intent: "pi_after_deletion",
+      subscription: null,
+      customer: "cus_topup_after",
+      client_reference_id: "an-account-deleted-before-topping-up",
+      metadata: { account_id: "an-account-deleted-before-topping-up", kind: "topup" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe("/v1/refunds");
+    expect(new URLSearchParams(calls[0].body).get("payment_intent")).toBe("pi_after_deletion");
+  });
+
+  it("never refunds a payment this service's Checkout did not make", async () => {
+    // Another product on the same Stripe account, with a client_reference_id
+    // of its own that means nothing here.
+    const calls = stripeApi();
+    const event = checkoutEvent({
+      id: "cs_someone_elses",
+      mode: "payment",
+      payment_status: "paid",
+      payment_intent: "pi_someone_elses",
+      subscription: null,
+      customer: "cus_someone_elses",
+      client_reference_id: "order-4411",
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls).toEqual([]);
+  });
+
+  it("never cancels a subscription to a price that is not Syllabus's", async () => {
+    const calls = stripeApi({ status: { sub_other_product: "active" }, price: { sub_other_product: "price_another_product" } });
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_other_product",
+      customer: "cus_other_product",
+      status: "active",
+      metadata: { account_id: "not-an-account-here" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/subscriptions/sub_other_product"]);
+  });
+});
+
 describe("checkout tells us whose customer this is", () => {
   it("links the customer to the account and writes no allowance yet", async () => {
     const { account } = await signedInAs("checkout@example.com");
@@ -233,6 +469,7 @@ describe("checkout tells us whose customer this is", () => {
   });
 
   it("stops retrying a session that names an account we do not have", async () => {
+    stripeApi();
     const res = await deliver(
       checkoutEvent({ customer: "cus_ghost", client_reference_id: "no-such-account" }),
     );

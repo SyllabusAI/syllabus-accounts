@@ -44,6 +44,9 @@ backport to.
 - The stored Google Drive grant and the refresh token behind it.
 - Schedule sync and any other account data in D1, including cross-account
   reads and injection into queries.
+- Account deletion (`/account/delete`): whether anything that names a deleted
+  account survives it beyond the keyed hash in `trial_used`, and whether that
+  hash can be tied back to a person without the Worker's secret.
 
 ## What the logs hold
 

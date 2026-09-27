@@ -13,6 +13,7 @@
  */
 
 import { Hono } from "hono";
+import { account } from "./account";
 import * as db from "./db";
 import { devices, TOKEN_IDLE_DAYS, tokenStanding } from "./devices";
 import type { AppEnv } from "./env";
@@ -123,6 +124,7 @@ app.post("/device/revoke", async (c) => {
 });
 
 app.route("/", google);
+app.route("/", account);
 app.route("/", devices);
 app.route("/", relay);
 app.route("/", settings);
