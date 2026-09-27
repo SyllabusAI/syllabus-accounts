@@ -250,9 +250,37 @@ two paid calls are made from this service instead:
                              -> { text, audio_seconds }
     POST /proxy/summarize    { transcript, course, date }
                              -> { summary, tokens }
+    POST /proxy/assistant    { question, summaries, session_id?, continuation?, transcripts? }
+                             -> an event stream: session, text, citation, escalate, done
     GET  /proxy/usage        what is left this month
 
-Both paid endpoints take a device bearer, never a browser session.
+The paid endpoints take a device bearer, never a browser session.
+
+### The study assistant
+
+`/proxy/assistant` answers a question about one course from the summaries the
+Mac read out of Drive, on Sonnet 5 and the service's Anthropic key. The Mac
+does the reading, because the lectures sit in the student's Drive and the
+Mac's `pipeline.log` is the index of them; this service fixes the model, the
+system prompt, the one tool (`fetch_transcripts`), the output cap and how the
+documents are framed, and stores no question, answer or lecture text.
+
+It is sold in sessions: Pro includes 15 a month and no other plan or the
+trial includes any. A request with no `session_id` opens one, which is the
+charge; follow-ups carry the id and ride on it for up to 12 questions, an
+hour, or $2.00 of spend, whichever comes first, after which the service
+answers `409 session_ended` and the Mac opens a new one. The course summaries
+are cached on the first question, so the follow-ups read them for a tenth of
+the price, which is what the session price was costed on.
+
+When the model needs the full transcripts it calls `fetch_transcripts`, and
+the stream ends with an `escalate` event carrying the lectures it asked for
+and the assistant turn so far. The Mac fetches those transcripts from Drive
+and posts again with `continuation` and `transcripts`; that call runs with
+`tool_choice: none`, so each question escalates at most once. Spend is
+metered in millionths of a dollar (usage kind `assistant`), because a
+session's cache writes, cache reads and output are priced too differently for
+a token count to say anything about the bill.
 
 Transcription runs on Groq (`whisper-large-v3`) and falls back to OpenAI
 (`gpt-4o-mini-transcribe`). Transcription is nearly the whole cost of an hour

@@ -44,7 +44,7 @@ export type AllowanceGrant = {
  * left but it will not summarize".
  *
  * The audio hours are HOME-STRETCH's, which the published prices were set
- * against. Assistant sessions are Pro's 15; nothing meters them yet (see
+ * against. Assistant sessions are Pro's 15, counted by src/assistant.ts (see
  * migrations/0010) and no other tier includes any.
  */
 export const TIERS: Record<TierName, AllowanceGrant & { price_usd: number; audio_hours: number }> = {
