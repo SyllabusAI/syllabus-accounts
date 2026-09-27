@@ -142,7 +142,7 @@ export function accountPage(
     `${billingNotice(notice)}<p>Signed in as <strong>${h(account.email)}</strong>${account.name ? ` (${h(account.name)})` : ""}.
         <form method="post" action="/logout" style="display:inline"><button>Sign out</button></form></p>
      <h2>Your Macs</h2>
-     <p class="muted">Each Mac's panel has an address here that only you can open, from any browser or phone, whenever that Mac is awake and its panel is running.</p>
+     <p class="muted">Each Mac's panel has an address here that only you can open, from any browser or phone, whenever that Mac is awake and its panel is running. A Mac that goes 90 days without using Syllabus is signed out and can sign in again from its Setup page.</p>
      <table><tbody>${rows}</tbody></table>
      ${devices.length ? signOutEverything : ""}
      <h2>Your plan</h2>
