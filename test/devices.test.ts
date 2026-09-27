@@ -1,4 +1,6 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { LIMITS, type Limit } from "../src/limits";
 import { claimDevice, get, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
 
 describe("claiming a panel", () => {
@@ -206,7 +208,21 @@ describe("signing out every Mac", () => {
 describe("the open device routes have a limit", () => {
   const from = (ip: string) => ({ "CF-Connecting-IP": ip });
 
+  /** Fill a bucket to its limit in this window and the next, as security.test.ts does. */
+  async function fill(bucket: string, rule: Limit, count = rule.limit) {
+    const start = Math.floor(Date.now() / 1000 / rule.window) * rule.window;
+    for (const w of [start, start + rule.window]) {
+      await env.DB.prepare(
+        "INSERT INTO rate_limits (bucket, window_start, count) VALUES (?, ?, ?) ON CONFLICT (bucket, window_start) DO UPDATE SET count = excluded.count",
+      )
+        .bind(bucket, w, count)
+        .run();
+    }
+  }
+
   it("stops one source from allocating claims without end", async () => {
+    // Most of the way to the limit already, so the flood below crosses it.
+    await fill("device-start:198.51.100.7", LIMITS.deviceStart, LIMITS.deviceStart.limit - 10);
     const codes = new Set<string>();
     let refused = 0;
     for (let i = 0; i < 20; i++) {
@@ -227,6 +243,14 @@ describe("the open device routes have a limit", () => {
     expect(elsewhere.status).toBe(200);
   });
 
+  it("lets a whole lecture hall on one campus /64 pair at once", async () => {
+    // Every Mac on the campus network shares one /64, the key the limit uses.
+    for (let i = 1; i <= 40; i++) {
+      const res = await postJson("/device/start", { name: `Student ${i}` }, from(`2001:db8:ca:1::${i.toString(16)}`));
+      expect(res.status, `Mac ${i}`).toBe(200);
+    }
+  });
+
   it("limits polling too, and a panel's own pace is nowhere near it", async () => {
     const started = (await (await postJson("/device/start", {}, from("198.51.100.9"))).json()) as {
       device_code: string;
@@ -239,12 +263,9 @@ describe("the open device routes have a limit", () => {
     }
     // Past the limit it answers slow_down, which the panel's claim loop waits
     // on rather than treating as a refusal: a claim in progress survives.
-    let sawSlowDown = false;
-    for (let i = 0; i < 60 && !sawSlowDown; i++) {
-      const res = await postJson("/device/poll", { device_code: started.device_code }, from("198.51.100.9"));
-      sawSlowDown = ((await res.json()) as { error: string }).error === "slow_down";
-    }
-    expect(sawSlowDown).toBe(true);
+    await fill("device-poll:198.51.100.9", LIMITS.devicePoll);
+    const res = await postJson("/device/poll", { device_code: started.device_code }, from("198.51.100.9"));
+    expect(((await res.json()) as { error: string }).error).toBe("slow_down");
   });
 
   it("still lets a person claim a Mac normally", async () => {

@@ -60,6 +60,20 @@ export const LIMITS = {
    */
   deviceApproveAddress: { limit: 300, window: 600 },
   /**
+   * POST /device/start, per source. Every Mac in a lecture hall shares one
+   * NAT address or one /64, and each starts a claim when it signs in (and
+   * again if a code expires first), so this is sized for a class pairing
+   * together. PENDING_CAP in devices.ts is the backstop that does not depend
+   * on the key.
+   */
+  deviceStart: { limit: 600, window: 600 },
+  /**
+   * POST /device/poll, per source. A pairing Mac polls every POLL_INTERVAL
+   * (5 s), twelve a minute, so this is a hundred Macs pairing at once. Past
+   * it the answer is slow_down, which a panel waits on, never a refusal.
+   */
+  devicePoll: { limit: 1200, window: 60 },
+  /**
    * POST /stripe/webhook, per source, checked before the signature. Stripe
    * delivers from a handful of addresses and retries anything refused, so
    * this is lenient on purpose: it exists so that garbage cannot make this

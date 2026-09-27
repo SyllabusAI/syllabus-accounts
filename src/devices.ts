@@ -36,13 +36,11 @@ const PROFILES = new Set(["syllabus", "sous"]);
  * A real panel starts one claim per sign-in and polls it every POLL_INTERVAL
  * seconds until a person types the code, so the limits below are far above
  * anything a Mac does and only bite on a script. They are keyed by source
- * address, which is a weak identifier that costs an attacker something to
- * vary; PENDING_CAP is the backstop that does not depend on the key at all.
+ * address (LIMITS.deviceStart and LIMITS.devicePoll in limits.ts, sized for
+ * a lecture hall on one address), which is a weak identifier that costs an
+ * attacker something to vary; PENDING_CAP is the backstop that does not
+ * depend on the key at all.
  */
-const START_LIMIT = 10;
-const START_WINDOW_SECONDS = 600;
-const POLL_LIMIT = 60;
-const POLL_WINDOW_SECONDS = 60;
 const PENDING_CAP = 500;
 
 function rateLimited(c: Context<AppEnv>, limit: number, windowSeconds: number, retryAfter: number) {
@@ -58,8 +56,8 @@ function tidyName(raw: unknown): string {
 }
 
 devices.post("/device/start", async (c) => {
-  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, START_LIMIT, START_WINDOW_SECONDS);
-  if (!gate.allowed) return rateLimited(c, START_LIMIT, START_WINDOW_SECONDS, gate.retryAfter);
+  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, LIMITS.deviceStart.limit, LIMITS.deviceStart.window);
+  if (!gate.allowed) return rateLimited(c, LIMITS.deviceStart.limit, LIMITS.deviceStart.window, gate.retryAfter);
 
   const body = (await c.req.json().catch(() => ({}))) as { profile?: string; name?: string };
   const profile = PROFILES.has(String(body.profile)) ? String(body.profile) : "syllabus";
@@ -67,7 +65,7 @@ devices.post("/device/start", async (c) => {
   await db.sweepDeviceCodes(c.env.DB);
   // Expired windows are of no further use and this is the quietest route
   // that runs often enough to clear them.
-  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * START_WINDOW_SECONDS);
+  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * LIMITS.deviceStart.window);
 
   // The limit above is per source; this one is not, so a spread-out flood
   // still cannot fill the table or exhaust the codes people have to read.
@@ -165,7 +163,7 @@ devices.post("/device/poll", async (c) => {
   // it by waiting longer (run_claim in intake/account.py). Anything else
   // reads to that loop as a refusal and abandons a claim that is still good,
   // which would turn a shared address into a sign-in that cannot finish.
-  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, POLL_LIMIT, POLL_WINDOW_SECONDS);
+  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, LIMITS.devicePoll.limit, LIMITS.devicePoll.window);
   if (!gate.allowed) {
     return c.json({ error: "slow_down", interval: POLL_INTERVAL * 2 }, 400, {
       "Retry-After": String(gate.retryAfter),
