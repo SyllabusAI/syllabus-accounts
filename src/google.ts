@@ -5,23 +5,28 @@
  *   /oauth2/callback  trades the code for an ID token, checks it, sets the session
  *   /logout           clears the session
  *
- * The state and nonce ride in a short-lived signed cookie between the two.
+ * The state, nonce, and PKCE verifier ride in a short-lived signed cookie
+ * between the two. State ties the callback to the browser that started it,
+ * the nonce ties the ID token to it, and PKCE (S256) ties the code: a code
+ * lifted from somebody else's redirect cannot be redeemed without the
+ * verifier, which never leaves this service and that browser's cookie.
  * The ID token arrives straight from Google's token endpoint over TLS, so
  * its signature is not re-checked here (OpenID Connect Core 3.1.3.7 allows
  * that for a token received over the direct token-endpoint connection); the
  * issuer, audience, expiry, nonce, and email_verified claims are.
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { applyTrialBlock } from "./account";
 import { upsertAccount } from "./db";
 import { finishConnect } from "./drive";
 import type { AppEnv } from "./env";
 import { page } from "./pages";
-import { clearSession, setSession } from "./session";
-import { fromBase64Url, randomId } from "./util";
+import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
 import { log } from "./log";
+import { clearSession, sameOrigin, sessionSecret, setSession } from "./session";
+import { fromBase64Url, randomId, toBase64Url } from "./util";
 
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -30,12 +35,46 @@ export const CALLBACK_PATH = "/oauth2/callback";
 const FLOW_COOKIE = "syllabus_accounts_signin";
 const FLOW_SECONDS = 600;
 
-export type Flow = { state: string; nonce: string; next: string; t: number; kind?: "signin" | "drive" };
+export type Flow = {
+  state: string;
+  nonce: string;
+  next: string;
+  t: number;
+  kind?: "signin" | "drive";
+  /** The PKCE code_verifier. Only its S256 hash goes to Google with the user. */
+  verifier?: string;
+};
 
-/** A path on this site to return to after signing in, never elsewhere. */
+/**
+ * A path on this site to return to after signing in, never elsewhere.
+ *
+ * Checking the first characters is not enough on its own: a browser reads
+ * "/\evil.test" and "/<tab>/evil.test" as "//evil.test", which is another
+ * host. So the value is resolved the way a browser would resolve it, and
+ * only kept when it lands on this origin; what is returned is rebuilt from
+ * the parsed path, never the raw input.
+ */
 export function safeNext(value: string | undefined): string {
-  if (value && value.startsWith("/") && !value.startsWith("//")) return value;
-  return "/";
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  // Backslashes and control characters have no business in a path we wrote,
+  // and each is a way to make a browser see a second slash.
+  if (/[\\\x00-\x1f\x7f]/.test(value)) return "/";
+  const base = "https://this-site.invalid";
+  let url: URL;
+  try {
+    url = new URL(value, base);
+  } catch {
+    return "/";
+  }
+  if (url.origin !== base) return "/";
+  return url.pathname + url.search + url.hash;
+}
+
+/** A fresh PKCE verifier and its S256 challenge (RFC 7636). */
+export async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
+  const verifier = randomId(32);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return { verifier, challenge: toBase64Url(new Uint8Array(digest)) };
 }
 
 export function redirectUri(publicUrl: string): string {
@@ -76,8 +115,17 @@ export function checkClaims(claims: IdClaims, clientId: string, nonce: string, n
 export const google = new Hono<AppEnv>();
 
 google.get("/login", async (c) => {
-  const flow: Flow = { state: randomId(18), nonce: randomId(18), next: safeNext(c.req.query("next")), t: Date.now() };
-  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), c.env.SESSION_SECRET, {
+  const wait = await overLimit(c, `login:${clientAddress(c)}`, LIMITS.login);
+  if (wait !== null) return limitedPage(c, wait);
+  const pkce = await pkcePair();
+  const flow: Flow = {
+    state: randomId(18),
+    nonce: randomId(18),
+    next: safeNext(c.req.query("next")),
+    t: Date.now(),
+    verifier: pkce.verifier,
+  };
+  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), sessionSecret(c), {
     path: "/",
     httpOnly: true,
     secure: c.env.PUBLIC_URL.startsWith("https://"),
@@ -91,20 +139,26 @@ google.get("/login", async (c) => {
     scope: "openid email profile",
     state: flow.state,
     nonce: flow.nonce,
+    code_challenge: pkce.challenge,
+    code_challenge_method: "S256",
     prompt: "select_account",
   });
   return c.redirect(`${AUTH_URL}?${params}`);
 });
 
 google.get(CALLBACK_PATH, async (c) => {
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, FLOW_COOKIE);
+  const wait = await overLimit(c, `callback:${clientAddress(c)}`, LIMITS.callback);
+  if (wait !== null) return limitedPage(c, wait);
+  const raw = await getSignedCookie(c, sessionSecret(c), FLOW_COOKIE);
   let flow: Flow | null = null;
   try {
     flow = raw ? (JSON.parse(raw) as Flow) : null;
   } catch {
     flow = null;
   }
-  if (!flow || Date.now() - flow.t > FLOW_SECONDS * 1000 || c.req.query("state") !== flow.state) {
+  // A flow without a verifier was started by the code before PKCE, in the
+  // ten minutes before a deploy; it is simply started again.
+  if (!flow || !flow.verifier || Date.now() - flow.t > FLOW_SECONDS * 1000 || c.req.query("state") !== flow.state) {
     return c.html(page("Sign in", "<p>That sign-in took too long or did not start here.</p><p><a href='/login'>Try again</a></p>"), 400);
   }
   if (c.req.query("error")) {
@@ -130,6 +184,7 @@ google.get(CALLBACK_PATH, async (c) => {
         client_secret: c.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: redirectUri(c.env.PUBLIC_URL),
         grant_type: "authorization_code",
+        code_verifier: flow.verifier,
       }),
     });
     if (!res.ok) throw new Error(`token endpoint answered ${res.status}`);
@@ -156,8 +211,32 @@ google.get(CALLBACK_PATH, async (c) => {
   return c.redirect(flow.next);
 });
 
-google.on(["GET", "POST"], "/logout", (c) => {
+function signOut(c: Context<AppEnv>) {
   clearSession(c);
   deleteCookie(c, FLOW_COOKIE, { path: "/" });
   return c.html(page("Signed out", "<p>You are signed out.</p><p><a href='/login'>Sign in</a></p>"));
+}
+
+/**
+ * Signing out is a state change, so another site must not be able to do it.
+ *
+ * The account page posts a form, which sameOrigin() checks like every other
+ * form here. A relayed panel links to GET /logout from this same origin, so
+ * a GET is honored when the browser says the navigation came from this site
+ * (Sec-Fetch-Site: same-origin) or from the person typing it (none). A GET
+ * from anywhere else, or from a browser too old to say, gets a button
+ * instead of a sign-out.
+ */
+google.get("/logout", (c) => {
+  const site = c.req.header("Sec-Fetch-Site") ?? "";
+  if (site === "same-origin" || site === "none") return signOut(c);
+  return c.html(
+    page("Sign out", `<form method="post" action="/logout"><button class="primary">Sign out</button></form>
+      <p class="muted"><a href="/">Stay signed in</a></p>`),
+  );
+});
+
+google.post("/logout", (c) => {
+  if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
+  return signOut(c);
 });

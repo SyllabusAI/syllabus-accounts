@@ -10,15 +10,31 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { accountById } from "./db";
 import type { AppEnv } from "./env";
+import { log } from "./log";
 
 export const SESSION_COOKIE = "syllabus_accounts_session";
 export const SESSION_DAYS = 30;
 
 type SessionData = { a: string; t: number };
 
+/**
+ * SESSION_SECRET, or a refusal to go on without one.
+ *
+ * An unset or empty secret would sign every cookie with a key anybody can
+ * reproduce, so a missing secret is an error rather than a default. The
+ * sign-in cookie between /login and the callback is signed with the same
+ * secret; the two cannot be swapped for each other, because neither one's
+ * contents pass the other's checks.
+ */
+export function sessionSecret(c: Context<AppEnv>): string {
+  const secret = c.env.SESSION_SECRET;
+  if (!secret) throw new Error("SESSION_SECRET is not set; refusing to sign or read a session");
+  return secret;
+}
+
 export async function setSession(c: Context<AppEnv>, accountId: string): Promise<void> {
   const data: SessionData = { a: accountId, t: Date.now() };
-  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), c.env.SESSION_SECRET, {
+  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), sessionSecret(c), {
     path: "/",
     httpOnly: true,
     secure: c.env.PUBLIC_URL.startsWith("https://"),
@@ -33,6 +49,10 @@ export function clearSession(c: Context<AppEnv>): void {
 
 /** A valid, unexpired session cookie's contents, or null. */
 async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
+  if (!c.env.SESSION_SECRET) {
+    log("SESSION_SECRET is not set; every session reads as signed out");
+    return null;
+  }
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
   if (!raw) return null;
   try {

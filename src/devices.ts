@@ -15,6 +15,7 @@
 import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { clientAddress as source, LIMITS, limitedPage, overLimit } from "./limits";
 import { approvedPage, devicePage } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
@@ -64,19 +65,12 @@ export function tokenStanding(lastUsedAt: string | null, nowMs = Date.now()): "l
  * A real panel starts one claim per sign-in and polls it every POLL_INTERVAL
  * seconds until a person types the code, so the limits below are far above
  * anything a Mac does and only bite on a script. They are keyed by source
- * address, which is a weak identifier that costs an attacker something to
- * vary; PENDING_CAP is the backstop that does not depend on the key at all.
+ * address (LIMITS.deviceStart and LIMITS.devicePoll in limits.ts, sized for
+ * a lecture hall on one address), which is a weak identifier that costs an
+ * attacker something to vary; PENDING_CAP is the backstop that does not
+ * depend on the key at all.
  */
-const START_LIMIT = 10;
-const START_WINDOW_SECONDS = 600;
-const POLL_LIMIT = 60;
-const POLL_WINDOW_SECONDS = 60;
 const PENDING_CAP = 500;
-
-/** Who is asking, as well as this can be known at the edge. */
-function source(c: Context<AppEnv>): string {
-  return c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
-}
 
 function rateLimited(c: Context<AppEnv>, limit: number, windowSeconds: number, retryAfter: number) {
   return c.json({ error: "rate_limited", limit, window_seconds: windowSeconds }, 429, {
@@ -91,8 +85,8 @@ function tidyName(raw: unknown): string {
 }
 
 devices.post("/device/start", async (c) => {
-  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, START_LIMIT, START_WINDOW_SECONDS);
-  if (!gate.allowed) return rateLimited(c, START_LIMIT, START_WINDOW_SECONDS, gate.retryAfter);
+  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, LIMITS.deviceStart.limit, LIMITS.deviceStart.window);
+  if (!gate.allowed) return rateLimited(c, LIMITS.deviceStart.limit, LIMITS.deviceStart.window, gate.retryAfter);
 
   const body = (await c.req.json().catch(() => ({}))) as { profile?: string; name?: string };
   const profile = PROFILES.has(String(body.profile)) ? String(body.profile) : "syllabus";
@@ -100,7 +94,7 @@ devices.post("/device/start", async (c) => {
   await db.sweepDeviceCodes(c.env.DB);
   // Expired windows are of no further use and this is the quietest route
   // that runs often enough to clear them.
-  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * START_WINDOW_SECONDS);
+  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * LIMITS.deviceStart.window);
 
   // The limit above is per source; this one is not, so a spread-out flood
   // still cannot fill the table or exhaust the codes people have to read.
@@ -132,6 +126,18 @@ devices.get("/device", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent(c.req.path + (c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "")));
   const code = normalizeUserCode(c.req.query("code") ?? "");
+  // A signed-in guesser learns from this page whether a code is live, so it
+  // is limited like the approval it leads to: per account, and per address
+  // so that a pile of accounts on one address gains nothing.
+  if (code) {
+    for (const [bucket, rule] of [
+      [`device-lookup:${account.id}`, LIMITS.deviceLookup],
+      [`device-lookup-ip:${source(c)}`, LIMITS.deviceLookupAddress],
+    ] as const) {
+      const wait = await overLimit(c, bucket, rule);
+      if (wait !== null) return limitedPage(c, wait);
+    }
+  }
   let deviceName = "";
   if (code) {
     const pending = await db.deviceCodeByUserCode(c.env.DB, code);
@@ -146,6 +152,17 @@ devices.post("/device/approve", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=/device");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
+  // A code guessed right would enroll somebody else's Mac into this account,
+  // and its notes into this account's Drive. 32^8 codes against at most
+  // PENDING_CAP live ones is already long odds; these make it hopeless, per
+  // account and per address, so a pile of accounts on one address gains nothing.
+  for (const [bucket, rule] of [
+    [`device-approve:${account.id}`, LIMITS.deviceApprove],
+    [`device-approve-ip:${source(c)}`, LIMITS.deviceApproveAddress],
+  ] as const) {
+    const wait = await overLimit(c, bucket, rule);
+    if (wait !== null) return limitedPage(c, wait);
+  }
   const form = await c.req.parseBody();
   const typed = String(form.user_code ?? "");
   const code = normalizeUserCode(typed);
@@ -175,7 +192,7 @@ devices.post("/device/poll", async (c) => {
   // it by waiting longer (run_claim in intake/account.py). Anything else
   // reads to that loop as a refusal and abandons a claim that is still good,
   // which would turn a shared address into a sign-in that cannot finish.
-  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, POLL_LIMIT, POLL_WINDOW_SECONDS);
+  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, LIMITS.devicePoll.limit, LIMITS.devicePoll.window);
   if (!gate.allowed) {
     return c.json({ error: "slow_down", interval: POLL_INTERVAL * 2 }, 400, {
       "Retry-After": String(gate.retryAfter),
