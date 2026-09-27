@@ -19,3 +19,8 @@ declare namespace Cloudflare {
     TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
   }
 }
+
+// Vite's import.meta.glob, which test/logs.test.ts uses to read src/ as text.
+interface ImportMeta {
+  glob(pattern: string, options: { query: "?raw"; import: "default"; eager: true }): Record<string, string>;
+}

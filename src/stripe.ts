@@ -34,6 +34,7 @@ import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
 import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
+import { log } from "./log";
 
 export const stripeHooks = new Hono<AppEnv>();
 
@@ -69,7 +70,7 @@ class RetryLater extends Error {}
 
 stripeHooks.post("/stripe/webhook", async (c) => {
   if (!c.env.STRIPE_WEBHOOK_SECRET) {
-    console.log("stripe: a webhook arrived and STRIPE_WEBHOOK_SECRET is not set; refusing it");
+    log("stripe: a webhook arrived and STRIPE_WEBHOOK_SECRET is not set; refusing it");
     return c.json({ error: "stripe_not_configured" }, 503);
   }
   const signature = c.req.header("stripe-signature") ?? "";
@@ -91,7 +92,7 @@ stripeHooks.post("/stripe/webhook", async (c) => {
   } catch (err) {
     // Never say which part failed. A bad signature and a stale timestamp are
     // the same answer to anybody who is not Stripe.
-    console.log(`stripe: refused a delivery, ${(err as Error).message}`);
+    log(`stripe: refused a delivery, ${(err as Error).message}`);
     return c.json({ error: "bad_signature" }, 400);
   }
 
@@ -99,7 +100,7 @@ stripeHooks.post("/stripe/webhook", async (c) => {
   // find nothing and both grant a month.
   const first = await db.claimStripeEvent(c.env.DB, event.id, event.type);
   if (!first) {
-    console.log(`stripe: ${event.type} ${event.id} was already handled`);
+    log(`stripe: ${event.type} ${event.id} was already handled`);
     return c.json({ ok: true, duplicate: true });
   }
 
@@ -113,10 +114,10 @@ stripeHooks.post("/stripe/webhook", async (c) => {
     await db.releaseStripeEvent(c.env.DB, event.id);
     const why = (err as Error).message;
     if (err instanceof RetryLater) {
-      console.log(`stripe: ${event.type} ${event.id} deferred, ${why}`);
+      log(`stripe: ${event.type} ${event.id} deferred, ${why}`);
       return c.json({ error: "retry_later" }, 500);
     }
-    console.log(`stripe: ${event.type} ${event.id} failed, ${why}`);
+    log(`stripe: ${event.type} ${event.id} failed, ${why}`);
     return c.json({ error: "handler_failed" }, 500);
   }
 });
@@ -154,7 +155,7 @@ async function verify(env: Bindings, raw: string, signature: string): Promise<St
 /** Deal with one verified event. Returns the account it was about, or "". */
 async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> {
   if (!HANDLED.has(event.type)) {
-    console.log(`stripe: ignoring ${event.type}`);
+    log(`stripe: ignoring ${event.type}`);
     return "";
   }
 
@@ -171,7 +172,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       // this one was deleted while its Checkout was open. A subscription it
       // started would charge a card for nothing, so it is ended here; a throw
       // from that is retried like any other failure.
-      console.log(`stripe: checkout session named account ${accountId}, which does not exist`);
+      log(`stripe: checkout session named account ${accountId}, which does not exist`);
       // A Checkout page left open in another tab can still be paid after its
       // account is deleted. A top-up has no events of its own, so the money
       // goes back here, once per session however often this is delivered. A
@@ -181,7 +182,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
         const intent = idOf(session.payment_intent as string | { id?: string } | null);
         if (intent) {
           await stripeClient(c.env).refunds.create({ payment_intent: intent }, { idempotencyKey: `orphan-topup:${session.id}` });
-          console.log(`stripe: refunded top-up ${session.id}, paid after its account was deleted`);
+          log(`stripe: refunded top-up ${session.id}, paid after its account was deleted`);
         }
       }
       const subscriptionId = session.mode === "subscription" ? idOf(session.subscription) : "";
@@ -195,7 +196,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
     // id is what stops a redelivery granting them twice.
     if (session.mode === "payment") {
       if (session.payment_status !== "paid") {
-        console.log(`stripe: top-up session ${session.id} is ${session.payment_status}; granting nothing`);
+        log(`stripe: top-up session ${session.id} is ${session.payment_status}; granting nothing`);
         return accountId;
       }
       const granted = await db.recordTopup(
@@ -205,7 +206,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
         TOPUP.audio_seconds,
         TOPUP.summary_tokens,
       );
-      console.log(`stripe: top-up for ${accountId} ${granted ? "granted" : "was already granted"}`);
+      log(`stripe: top-up for ${accountId} ${granted ? "granted" : "was already granted"}`);
       return accountId;
     }
 
@@ -223,7 +224,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
     // deletion starts a subscription nobody can cancel, so anything still live
     // is ended. Nothing is left to mirror it onto either way, so Stripe is
     // told to stop rather than retrying for three days.
-    console.log(`stripe: ${event.type} for ${sub.id} names a deleted account; nothing to update`);
+    log(`stripe: ${event.type} for ${sub.id} names a deleted account; nothing to update`);
     if (isLive(sub.status)) await endOrphan(c.env, sub.id, idOf(sub.customer));
     return "";
   }
@@ -313,7 +314,7 @@ function periodEnd(sub: Stripe.Subscription): string {
 async function writeAllowance(c: Context<AppEnv>, accountId: string): Promise<void> {
   const existing = await db.allowance(c.env.DB, accountId);
   if (existing && PROTECTED_SOURCES.has(existing.source)) {
-    console.log(`stripe: leaving the ${existing.source} allowance on account ${accountId} alone`);
+    log(`stripe: leaving the ${existing.source} allowance on account ${accountId} alone`);
     return;
   }
   const subs = await db.subscriptionsOf(c.env.DB, accountId);
@@ -323,7 +324,7 @@ async function writeAllowance(c: Context<AppEnv>, accountId: string): Promise<vo
   if (!best) return;
   const grant = allowanceFromSubscription(best);
   await db.putAllowance(c.env.DB, accountId, grant);
-  console.log(`stripe: account ${accountId} is now on ${grant.source}`);
+  log(`stripe: account ${accountId} is now on ${grant.source}`);
 }
 
 /** A Stripe field that is a string, an expanded object, or absent. */
@@ -387,7 +388,7 @@ export async function endSubscription(stripe: Stripe, id: string, now = Date.now
     return { canceled: true, refunded: await refundUnused(stripe, sub, now), refundFailed: false };
   } catch (err) {
     const invoice = idOf(sub.latest_invoice);
-    console.error(
+    log(
       `stripe: REFUND OWED, issue it by hand. Subscription ${sub.id} (customer ${idOf(sub.customer)}, invoice ${invoice || "none"}) ` +
         `was canceled but its unused time was not refunded: ${(err as Error).message}`,
     );
@@ -444,7 +445,7 @@ async function refundUnused(stripe: Stripe, sub: Stripe.Subscription, now: numbe
     },
     { idempotencyKey: `unused-time:${sub.id}` },
   );
-  console.log(`stripe: refunded ${amount} of ${invoice.amount_paid} ${invoice.currency} on ${sub.id}, the unused time`);
+  log(`stripe: refunded ${amount} of ${invoice.amount_paid} ${invoice.currency} on ${sub.id}, the unused time`);
   return amount;
 }
 
@@ -491,7 +492,7 @@ async function endOrphan(env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">, subscr
   // Already over: the deletion canceled it, and deleted the customer with it.
   if (!isLive(current.status)) return;
   const ended = await endSubscription(stripe, subscriptionId);
-  console.log(
+  log(
     `stripe: canceled ${subscriptionId}, which started after its account was deleted` +
       (ended.refunded ? `; refunded ${ended.refunded}` : ""),
   );
@@ -504,7 +505,7 @@ async function endOrphan(env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">, subscr
   try {
     await deleteCustomer(stripe, customer);
   } catch (err) {
-    console.error(`stripe: customer ${customer} of a deleted account was not deleted; delete it by hand: ${(err as Error).message}`);
+    log(`stripe: customer ${customer} of a deleted account was not deleted; delete it by hand: ${(err as Error).message}`);
   }
 }
 
@@ -550,11 +551,11 @@ export async function endTrialIfSpent(
 
   try {
     await stripeClient(env).subscriptions.update(trialing.stripe_subscription_id, { trial_end: "now" });
-    console.log(`stripe: trial spent, ended ${trialing.stripe_subscription_id} for ${accountId}`);
+    log(`stripe: trial spent, ended ${trialing.stripe_subscription_id} for ${accountId}`);
   } catch (err) {
     // Worth a line and nothing more. The trial ends on its own at the end of
     // its period, and until then the account is simply out of hours and can
     // top up, which is the same hard stop everybody else gets.
-    console.log(`stripe: could not end the trial for ${accountId}, ${(err as Error).message}`);
+    log(`stripe: could not end the trial for ${accountId}, ${(err as Error).message}`);
   }
 }

@@ -26,6 +26,7 @@ import { notYoursPage, page } from "./pages";
 import { MAX_BODY_BYTES, REQUEST_HEADERS, type RelayState } from "./panel-relay";
 import { sameOrigin } from "./session";
 import { PANEL_PREFIX } from "./util";
+import { log } from "./log";
 
 export { PANEL_PREFIX, panelUrl } from "./util";
 
@@ -101,7 +102,7 @@ relay.all("/p/:device/*", async (c) => {
     );
   }
   if (device.account_id !== account.id) {
-    console.log(`refused ${account.email} at the panel of device ${device.id}: belongs to another account`);
+    log(`refused account ${account.id} at the panel of device ${device.id}: belongs to another account`);
     if (isApi) return c.json({ error: "not_yours" }, 403);
     return c.html(notYoursPage(account.email), 403);
   }

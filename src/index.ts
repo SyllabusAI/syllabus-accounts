@@ -30,6 +30,7 @@ import type { Bindings } from "./env";
 import { bodyCap, securityHeaders } from "./headers";
 import { sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
+import { log } from "./log";
 
 const app = new Hono<AppEnv>();
 
@@ -141,7 +142,7 @@ app.route("/", proxy);
 
 app.notFound((c) => c.text("Not found", 404));
 app.onError((err, c) => {
-  console.log(`error: ${err.message}`);
+  log(`error: ${err.message}`);
   return c.text("Something went wrong", 500);
 });
 
@@ -159,7 +160,7 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
     (async () => {
       const sweep = await sweepDriveGrants(env);
       if (sweep.resealed || sweep.unreadable || sweep.remaining) {
-        console.log(
+        log(
           `drive keys: resealed ${sweep.resealed}, unreadable ${sweep.unreadable}, ` +
             `${sweep.remaining} not yet under the current DRIVE_KEY`,
         );

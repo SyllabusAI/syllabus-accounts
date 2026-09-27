@@ -10,6 +10,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { accountById } from "./db";
 import type { AppEnv } from "./env";
+import { log } from "./log";
 
 export const SESSION_COOKIE = "syllabus_accounts_session";
 export const SESSION_DAYS = 30;
@@ -49,7 +50,7 @@ export function clearSession(c: Context<AppEnv>): void {
 /** A valid, unexpired session cookie's contents, or null. */
 async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   if (!c.env.SESSION_SECRET) {
-    console.log("SESSION_SECRET is not set; every session reads as signed out");
+    log("SESSION_SECRET is not set; every session reads as signed out");
     return null;
   }
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);

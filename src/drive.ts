@@ -24,6 +24,7 @@ import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, pkcePair, redirectUri, 
 import { page } from "./pages";
 import { browserOnly, sameOrigin, sessionSecret } from "./session";
 import { randomId } from "./util";
+import { log } from "./log";
 
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
@@ -94,9 +95,9 @@ export async function finishConnect(c: Context<AppEnv>, flow: Flow, code: string
       return c.html(page("Google Drive", "<p>Google did not return a lasting grant. Try again; if it keeps happening, remove Syllabus under your Google account's third-party access and connect once more.</p><p><a href='/drive/connect'>Try again</a></p>"), 400);
     }
     await db.putDriveGrant(c.env.DB, account.id, await sealGrant(c.env, body.refresh_token), body.scope ?? DRIVE_SCOPE, (claims.email ?? "").toLowerCase());
-    console.log(`drive connected for ${account.email} (${claims.email})`);
+    log(`drive connected for account ${account.id}`);
   } catch (err) {
-    console.log(`drive connect failed: ${(err as Error).message}`);
+    log(`drive connect failed: ${(err as Error).message}`);
     return c.html(page("Google Drive", "<p>The Drive connection could not be completed with Google.</p><p><a href='/drive/connect'>Try again</a></p>"), 502);
   }
   return c.redirect("/");
@@ -130,7 +131,7 @@ drive.post("/drive/token", async (c) => {
   try {
     refreshToken = await openGrant(c.env, grant);
   } catch {
-    console.log(`drive grant for ${account.email} cannot be decrypted under DRIVE_KEY or DRIVE_KEY_PREVIOUS`);
+    log(`drive grant for account ${account.id} cannot be decrypted under DRIVE_KEY or DRIVE_KEY_PREVIOUS`);
     return c.json({ error: "grant_unreadable" }, 500);
   }
   const res = await fetch(TOKEN_URL, {
@@ -146,11 +147,11 @@ drive.post("/drive/token", async (c) => {
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; scope?: string; error?: string };
   if (res.status === 400 && body.error === "invalid_grant") {
     await db.markDriveGrantRevoked(c.env.DB, account.id, "Google no longer honors the grant");
-    console.log(`drive grant for ${account.email} was revoked at Google`);
+    log(`drive grant for account ${account.id} was revoked at Google`);
     return c.json({ error: "grant_revoked", reason: "Google no longer honors the grant" }, 409);
   }
   if (!res.ok || !body.access_token) {
-    console.log(`drive token refresh for ${account.email} failed: ${res.status} ${body.error ?? ""}`);
+    log(`drive token refresh for account ${account.id} failed: ${res.status} ${body.error ?? ""}`);
     return c.json({ error: "google_unavailable", status: res.status }, 502);
   }
   return c.json({
@@ -201,6 +202,6 @@ export async function revokeGrantAtGoogle(env: Pick<Bindings, "DRIVE_KEY" | "DRI
       body: new URLSearchParams({ token }),
     });
   } catch (err) {
-    console.log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
+    log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
   }
 }

@@ -26,6 +26,7 @@ import { page } from "./pages";
 import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
 import { clearSession, sameOrigin, sessionSecret, setSession } from "./session";
 import { fromBase64Url, randomId, toBase64Url } from "./util";
+import { log } from "./log";
 
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -192,7 +193,7 @@ google.get(CALLBACK_PATH, async (c) => {
     claims = decodeClaims(body.id_token);
     checkClaims(claims, c.env.GOOGLE_CLIENT_ID, flow.nonce);
   } catch (err) {
-    console.log(`sign-in failed: ${(err as Error).message}`);
+    log(`sign-in failed: ${(err as Error).message}`);
     return c.html(page("Sign in", "<p>The sign-in could not be checked with Google.</p><p><a href='/login'>Try again</a></p>"), 502);
   }
 
@@ -204,7 +205,7 @@ google.get(CALLBACK_PATH, async (c) => {
   });
   // A Google identity that deleted an account after its trial gets no second one.
   await applyTrialBlock(c.env, account.id, claims.sub);
-  console.log(`signed in: ${account.email}`);
+  log(`signed in: account ${account.id}`);
   deleteCookie(c, FLOW_COOKIE, { path: "/" });
   await setSession(c, account.id);
   return c.redirect(flow.next);

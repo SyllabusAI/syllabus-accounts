@@ -301,6 +301,17 @@ from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
 forgets it, which gives those people a trial again rather than locking anybody
 out.
 
+The Worker's logs are not the database, and they hold less. Cloudflare keeps
+them (Workers Logs, `wrangler tail`, any Logpush job) and anyone with
+dashboard access can read them, so a line names an account by its id and a
+Mac by its device id, never by an email address, a name, a Google subject,
+a Mac's name, an IP address, a token, or a query string. Every line goes
+through `src/log.ts`, which also scrubs anything shaped like an address, a
+key, or a query string out of error text that Google, Stripe, or D1 quoted
+back. `test/logs.test.ts` holds the source to that, and
+`test/no-pii-in-logs.ts` fails any test in the suite whose log lines carry
+an address or a secret. To find the person behind an id, look it up in D1.
+
 ## Billing
 
 Stripe owns the subscription. This service mirrors it, and the mirror is what
