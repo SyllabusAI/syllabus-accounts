@@ -12,6 +12,7 @@
 
 import type { Bindings } from "./env";
 import type { Subscription } from "./db";
+import { log } from "./log";
 
 export type TierName = "starter" | "standard" | "pro";
 
@@ -180,7 +181,7 @@ export function tierForPrice(env: Pick<Bindings, "STRIPE_PRICE_STARTER" | "STRIP
 export function allowanceForTier(tier: string): AllowanceGrant {
   const known = TIERS[tier as TierName];
   if (known) return { ...grantOf(known) };
-  console.log(`tiers: no allowance is defined for tier "${tier}"; granting starter`);
+  log(`tiers: no allowance is defined for tier "${tier}"; granting starter`);
   return { ...grantOf(TIERS.starter), source: tier || "unknown" };
 }
 

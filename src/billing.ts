@@ -23,6 +23,7 @@ import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { stripeClient } from "./stripe";
 import { entitlingSubscription, type TierName } from "./tiers";
+import { log } from "./log";
 
 export const billing = new Hono<AppEnv>();
 
@@ -59,7 +60,7 @@ async function ready(c: Context<AppEnv>) {
   // is the second lock on a door browserOnly() is the first lock on.
   if (!sameOrigin(c)) return { refusal: c.text("Bad origin", 403) };
   if (!c.env.STRIPE_SECRET_KEY) {
-    console.log("billing: a billing route was reached and STRIPE_SECRET_KEY is not set");
+    log("billing: a billing route was reached and STRIPE_SECRET_KEY is not set");
     return { refusal: c.html(problem("Billing is not switched on yet. Nothing was charged.")) };
   }
   return { account };
@@ -74,7 +75,7 @@ billing.post("/billing/checkout", async (c) => {
   if (!isTier(wanted)) return c.html(problem("That is not a plan we sell."));
   const price = priceFor(c, wanted);
   if (!price) {
-    console.log(`billing: no price id is configured for ${wanted}`);
+    log(`billing: no price id is configured for ${wanted}`);
     return c.html(problem("That plan cannot be bought yet. Nothing was charged."));
   }
   /**
@@ -123,7 +124,7 @@ billing.post("/billing/checkout", async (c) => {
     if (!session.url) throw new Error("Stripe returned a session with no url");
     return c.redirect(session.url, 303);
   } catch (err) {
-    console.log(`billing: checkout failed, ${(err as Error).message}`);
+    log(`billing: checkout failed, ${(err as Error).message}`);
     return c.html(problem("Stripe could not start that. Nothing was charged."));
   }
 });
@@ -144,7 +145,7 @@ billing.post("/billing/portal", async (c) => {
   } catch (err) {
     // The commonest cause by far is the portal never having been activated in
     // the Stripe dashboard, which is a settings page rather than a bug here.
-    console.log(`billing: the portal would not open, ${(err as Error).message}`);
+    log(`billing: the portal would not open, ${(err as Error).message}`);
     return c.html(problem("Stripe could not open the billing page. Nothing has changed."));
   }
 });
@@ -162,7 +163,7 @@ billing.post("/billing/topup", async (c) => {
   if (refusal) return refusal;
 
   if (!c.env.STRIPE_PRICE_TOPUP) {
-    console.log("billing: a top-up was asked for and STRIPE_PRICE_TOPUP is not set");
+    log("billing: a top-up was asked for and STRIPE_PRICE_TOPUP is not set");
     return c.html(problem("Top-ups are not switched on yet. Nothing was charged."));
   }
   const customer = await db.stripeCustomerOf(c.env.DB, account!.id);
@@ -185,7 +186,7 @@ billing.post("/billing/topup", async (c) => {
     if (!session.url) throw new Error("Stripe returned a session with no url");
     return c.redirect(session.url, 303);
   } catch (err) {
-    console.log(`billing: the top-up would not start, ${(err as Error).message}`);
+    log(`billing: the top-up would not start, ${(err as Error).message}`);
     return c.html(problem("Stripe could not start that. Nothing was charged."));
   }
 });

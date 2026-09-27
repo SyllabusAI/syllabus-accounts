@@ -45,6 +45,15 @@ backport to.
 - Schedule sync and any other account data in D1, including cross-account
   reads and injection into queries.
 
+## What the logs hold
+
+Account ids and device ids, and nothing that names a person. Worker logs
+are retained by Cloudflare and visible to anyone with access to the
+account's dashboard, so no log line carries an email address, a name, a
+Google subject, an IP address, a device or Drive token, an OAuth code, an API
+key, or a URL's query string. A log line that does is a bug worth
+reporting.
+
 ## Out of scope
 
 - **The Syllabus app itself.** Recording, transcription, the summary, the

@@ -30,6 +30,7 @@ import Stripe from "stripe";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
+import { log } from "./log";
 
 export const stripeHooks = new Hono<AppEnv>();
 
@@ -65,7 +66,7 @@ class RetryLater extends Error {}
 
 stripeHooks.post("/stripe/webhook", async (c) => {
   if (!c.env.STRIPE_WEBHOOK_SECRET) {
-    console.log("stripe: a webhook arrived and STRIPE_WEBHOOK_SECRET is not set; refusing it");
+    log("stripe: a webhook arrived and STRIPE_WEBHOOK_SECRET is not set; refusing it");
     return c.json({ error: "stripe_not_configured" }, 503);
   }
   const signature = c.req.header("stripe-signature") ?? "";
@@ -82,7 +83,7 @@ stripeHooks.post("/stripe/webhook", async (c) => {
   } catch (err) {
     // Never say which part failed. A bad signature and a stale timestamp are
     // the same answer to anybody who is not Stripe.
-    console.log(`stripe: refused a delivery, ${(err as Error).message}`);
+    log(`stripe: refused a delivery, ${(err as Error).message}`);
     return c.json({ error: "bad_signature" }, 400);
   }
 
@@ -90,7 +91,7 @@ stripeHooks.post("/stripe/webhook", async (c) => {
   // find nothing and both grant a month.
   const first = await db.claimStripeEvent(c.env.DB, event.id, event.type);
   if (!first) {
-    console.log(`stripe: ${event.type} ${event.id} was already handled`);
+    log(`stripe: ${event.type} ${event.id} was already handled`);
     return c.json({ ok: true, duplicate: true });
   }
 
@@ -104,10 +105,10 @@ stripeHooks.post("/stripe/webhook", async (c) => {
     await db.releaseStripeEvent(c.env.DB, event.id);
     const why = (err as Error).message;
     if (err instanceof RetryLater) {
-      console.log(`stripe: ${event.type} ${event.id} deferred, ${why}`);
+      log(`stripe: ${event.type} ${event.id} deferred, ${why}`);
       return c.json({ error: "retry_later" }, 500);
     }
-    console.log(`stripe: ${event.type} ${event.id} failed, ${why}`);
+    log(`stripe: ${event.type} ${event.id} failed, ${why}`);
     return c.json({ error: "handler_failed" }, 500);
   }
 });
@@ -145,7 +146,7 @@ async function verify(env: Bindings, raw: string, signature: string): Promise<St
 /** Deal with one verified event. Returns the account it was about, or "". */
 async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> {
   if (!HANDLED.has(event.type)) {
-    console.log(`stripe: ignoring ${event.type}`);
+    log(`stripe: ignoring ${event.type}`);
     return "";
   }
 
@@ -160,7 +161,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       // Not retryable: a session naming an account that does not exist will
       // not start existing. Swallowed so Stripe stops, and logged so it is
       // findable.
-      console.log(`stripe: checkout session named account ${accountId}, which does not exist`);
+      log(`stripe: checkout session named account ${accountId}, which does not exist`);
       return "";
     }
     await db.linkStripeCustomer(c.env.DB, customerId, accountId);
@@ -170,7 +171,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
     // id is what stops a redelivery granting them twice.
     if (session.mode === "payment") {
       if (session.payment_status !== "paid") {
-        console.log(`stripe: top-up session ${session.id} is ${session.payment_status}; granting nothing`);
+        log(`stripe: top-up session ${session.id} is ${session.payment_status}; granting nothing`);
         return accountId;
       }
       const granted = await db.recordTopup(
@@ -180,7 +181,7 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
         TOPUP.audio_seconds,
         TOPUP.summary_tokens,
       );
-      console.log(`stripe: top-up for ${accountId} ${granted ? "granted" : "was already granted"}`);
+      log(`stripe: top-up for ${accountId} ${granted ? "granted" : "was already granted"}`);
       return accountId;
     }
 
@@ -272,7 +273,7 @@ function periodEnd(sub: Stripe.Subscription): string {
 async function writeAllowance(c: Context<AppEnv>, accountId: string): Promise<void> {
   const existing = await db.allowance(c.env.DB, accountId);
   if (existing && PROTECTED_SOURCES.has(existing.source)) {
-    console.log(`stripe: leaving the ${existing.source} allowance on account ${accountId} alone`);
+    log(`stripe: leaving the ${existing.source} allowance on account ${accountId} alone`);
     return;
   }
   const subs = await db.subscriptionsOf(c.env.DB, accountId);
@@ -282,7 +283,7 @@ async function writeAllowance(c: Context<AppEnv>, accountId: string): Promise<vo
   if (!best) return;
   const grant = allowanceFromSubscription(best);
   await db.putAllowance(c.env.DB, accountId, grant);
-  console.log(`stripe: account ${accountId} is now on ${grant.source}`);
+  log(`stripe: account ${accountId} is now on ${grant.source}`);
 }
 
 /** A Stripe field that is a string, an expanded object, or absent. */
@@ -334,11 +335,11 @@ export async function endTrialIfSpent(
 
   try {
     await stripeClient(env).subscriptions.update(trialing.stripe_subscription_id, { trial_end: "now" });
-    console.log(`stripe: trial spent, ended ${trialing.stripe_subscription_id} for ${accountId}`);
+    log(`stripe: trial spent, ended ${trialing.stripe_subscription_id} for ${accountId}`);
   } catch (err) {
     // Worth a line and nothing more. The trial ends on its own at the end of
     // its period, and until then the account is simply out of hours and can
     // top up, which is the same hard stop everybody else gets.
-    console.log(`stripe: could not end the trial for ${accountId}, ${(err as Error).message}`);
+    log(`stripe: could not end the trial for ${accountId}, ${(err as Error).message}`);
   }
 }
