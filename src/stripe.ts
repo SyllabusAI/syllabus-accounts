@@ -505,7 +505,7 @@ async function endOrphan(
   // else's product.
   const ours = (current.items?.data ?? []).some((item) => tierForPrice(env, item.price?.id ?? "") !== null);
   if (!ours) {
-    console.log(`stripe: ${subscriptionId} names a deleted account but is not a Syllabus price; left alone`);
+    log(`stripe: ${subscriptionId} names a deleted account but is not a Syllabus price; left alone`);
     return;
   }
   const ended = await endSubscription(stripe, subscriptionId);
