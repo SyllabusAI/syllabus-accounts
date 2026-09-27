@@ -162,9 +162,9 @@ export const proxy = new Hono<AppEnv>();
 
 // --- Small helpers ----------------------------------------------------------
 
-type Refusal = { status: 400 | 401 | 402 | 413 | 429 | 502; body: Record<string, unknown>; headers?: Record<string, string> };
+export type Refusal = { status: 400 | 401 | 402 | 409 | 413 | 429 | 502; body: Record<string, unknown>; headers?: Record<string, string> };
 
-function refuse(c: Context<AppEnv>, r: Refusal) {
+export function refuse(c: Context<AppEnv>, r: Refusal) {
   return c.json(r.body, r.status, r.headers ?? {});
 }
 
@@ -175,7 +175,7 @@ function refuse(c: Context<AppEnv>, r: Refusal) {
  * key and an error body can quote a request back. The status alone is enough
  * to tell a panel whether to retry, and enough to find the call in the logs.
  */
-function providerFailed(what: string, status: number): Refusal {
+export function providerFailed(what: string, status: number): Refusal {
   console.log(`proxy: ${what} answered ${status}`);
   if (status === 429) return { status: 429, body: { error: "provider_busy" }, headers: { "Retry-After": "30" } };
   return { status: 502, body: { error: "provider_unavailable" } };
@@ -215,7 +215,7 @@ function ceilingReached(kind: db.UsageKind): Refusal {
  * ceiling and the refusal all keep working with no change: they see one
  * larger number, exactly as they would for a larger plan.
  */
-async function allowanceFor(database: D1Database, accountId: string) {
+export async function allowanceFor(database: D1Database, accountId: string) {
   const [row, extra] = await Promise.all([
     db.allowance(database, accountId),
     db.topupsThisPeriod(database, accountId),
@@ -223,6 +223,9 @@ async function allowanceFor(database: D1Database, accountId: string) {
   return {
     audio_seconds: (row?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds) + extra.audio_seconds,
     summary_tokens: (row?.summary_tokens ?? TRIAL_ALLOWANCE.summary_tokens) + extra.summary_tokens,
+    // Not topped up and not in the trial: only a plan that includes study
+    // sessions has any (src/tiers.ts), and a top-up buys hours, not sessions.
+    assistant_sessions: row?.assistant_sessions ?? 0,
     source: row?.source || "trial",
     topped_up: extra.audio_seconds > 0,
   };
@@ -250,7 +253,7 @@ function declaredLength(header: string | undefined, cap: number): Refusal | null
  *
  * Returns the bytes, or the refusal to send back.
  */
-async function boundedBody(c: Context<AppEnv>, cap: number): Promise<Uint8Array | Refusal> {
+export async function boundedBody(c: Context<AppEnv>, cap: number): Promise<Uint8Array | Refusal> {
   const stream = c.req.raw.body;
   if (!stream) return new Uint8Array(0);
   const reader = stream.getReader();
@@ -279,11 +282,11 @@ async function boundedBody(c: Context<AppEnv>, cap: number): Promise<Uint8Array 
   return out;
 }
 
-function isRefusal(v: Uint8Array | Refusal): v is Refusal {
+export function isRefusal(v: Uint8Array | Refusal): v is Refusal {
   return !(v instanceof Uint8Array);
 }
 
-function label(raw: unknown): string {
+export function label(raw: unknown): string {
   return String(raw ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_CHARS);
 }
 
@@ -611,10 +614,11 @@ proxy.get("/proxy/usage", async (c) => {
   const account = c.get("account");
   if (!account) return c.json({ error: "not_signed_in" }, 401);
   const allowed = await allowanceFor(c.env.DB, account.id);
-  const [audio, tokens, split] = await Promise.all([
+  const [audio, tokens, split, sessions] = await Promise.all([
     db.usedThisPeriod(c.env.DB, account.id, "transcribe"),
     db.usedThisPeriod(c.env.DB, account.id, "summarize"),
     db.providerSplit(c.env.DB, account.id, "transcribe"),
+    db.assistantSessionsThisPeriod(c.env.DB, account.id),
   ]);
   const audioLeft = Math.max(0, allowed.audio_seconds - audio);
   const tokensLeft = Math.max(0, allowed.summary_tokens - tokens);
@@ -627,6 +631,13 @@ proxy.get("/proxy/usage", async (c) => {
     topped_up: allowed.topped_up,
     audio_seconds: { used: audio, allowance: allowed.audio_seconds, left: audioLeft },
     summary_tokens: { used: tokens, allowance: allowed.summary_tokens, left: tokensLeft },
+    // Study sessions opened this month (src/assistant.ts). Zero allowance is
+    // every plan but Pro, and the panel says so rather than offering the box.
+    assistant_sessions: {
+      used: sessions,
+      allowance: allowed.assistant_sessions,
+      left: Math.max(0, allowed.assistant_sessions - sessions),
+    },
     // The one number a panel can act on. Working it out here rather than
     // there keeps it next to the reservation rules it is derived from; a
     // panel doing its own arithmetic would drift the first time they change.
