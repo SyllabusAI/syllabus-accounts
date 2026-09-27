@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
-import { ASSISTANT_MODEL, costOf, SESSION_QUESTIONS } from "../src/assistant";
+import { ASSISTANT_MODEL, costOf, SESSION_QUESTIONS, thinkingParam } from "../src/assistant";
 import { claimDevice, get, postJson } from "./helpers";
 
 afterEach(() => {
@@ -161,6 +161,8 @@ describe("a question", () => {
     const sent = bodies[0];
     expect(sent.model).toBe(ASSISTANT_MODEL);
     expect(sent.max_tokens).toBe(8000);
+    // Off, and said so: Sonnet 5 would think adaptively if the field were left out.
+    expect(sent.thinking).toEqual({ type: "disabled" });
     expect(sent.system).toContain("study assistant inside Syllabus");
     expect(sent.tools.map((t: any) => t.name)).toEqual(["fetch_transcripts"]);
     expect(sent.tool_choice).toEqual({ type: "auto" });
@@ -324,6 +326,7 @@ describe("going to the transcripts", () => {
     // Same tools and system, so the course is read from cache; no second call.
     expect(sent.tools.map((t: any) => t.name)).toEqual(["fetch_transcripts"]);
     expect(sent.tool_choice).toEqual({ type: "none" });
+    expect(sent.thinking).toEqual(bodies[0].thinking);
     expect(sent.system).toBe(bodies[0].system);
     expect(sent.messages[1]).toEqual({ role: "assistant", content: esc.continuation });
     expect(sent.messages[2].content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_1" });
@@ -377,5 +380,12 @@ describe("going to the transcripts", () => {
     upstream(() => answered());
     const call = { type: "tool_use", id: "toolu_x", name: "fetch_transcripts", input: {} };
     expect((await ask(token, { continuation: [call] })).status).toBe(400);
+  });
+});
+
+describe("thinking, when it is turned on", () => {
+  it("asks for adaptive thinking with the reasoning left out of the reply", () => {
+    expect(thinkingParam("adaptive")).toEqual({ type: "adaptive", display: "omitted" });
+    expect(thinkingParam("disabled")).toEqual({ type: "disabled" });
   });
 });
