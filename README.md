@@ -138,8 +138,10 @@ Unset (the default), nothing changes. To turn it on:
    `PANEL_ORIGIN` in `src/env.ts`. It may not be `PUBLIC_URL`'s host, a
    parent of it, or a subdomain of it; those are refused and nothing is
    relayed until fixed.
-2. Check that `curl -si https://<panel host>/p/x/` is answered by this
-   Worker (a 302 to `PUBLIC_URL`).
+2. Check that `curl -s https://<panel host>/healthz` answers `{"ok":true}`.
+   While PANEL_ORIGIN is still empty that host is served as the account
+   app, which is how you know it reaches this Worker. (Once it is set,
+   `/healthz` there is a 404, like everything but `/p/`.)
 3. Set `"PANEL_ORIGIN": "https://<panel host>"` in `wrangler.jsonc`, run
    `npm run types`, and merge. Old `PUBLIC_URL/p/<d>/` links keep working:
    they hand over to the panel host.

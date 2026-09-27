@@ -45,8 +45,8 @@
     // EMPTY on purpose: empty means panels stay at PUBLIC_URL/p/<device>/ as
     // they always have. Before setting it, give the host to this Worker in
     // Cloudflare (a custom domain or route) and check that
-    //   curl -si <PANEL_ORIGIN>/p/x/
-    // is answered by this Worker. Prefer a different registrable domain from
+    //   curl -s <PANEL_ORIGIN>/healthz
+    // answers {"ok":true}, which means the host reaches this Worker. Prefer a different registrable domain from
     // PUBLIC_URL's; see PANEL_ORIGIN in src/env.ts for why. It must not be
     // PUBLIC_URL's host, a parent of it, or a subdomain of it: those are
     // refused and panels stop being served until it is fixed.
