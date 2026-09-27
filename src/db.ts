@@ -104,9 +104,13 @@ export async function insertDeviceToken(
   deviceId: string,
   tokenVersion: number,
 ): Promise<void> {
+  // Handing a token out counts as its first use, so its idle window starts now.
+  const ts = now();
   await db
-    .prepare("INSERT INTO device_tokens (token_hash, device_id, created_at, token_version) VALUES (?, ?, ?, ?)")
-    .bind(tokenHash, deviceId, now(), tokenVersion)
+    .prepare(
+      "INSERT INTO device_tokens (token_hash, device_id, created_at, last_used_at, token_version) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(tokenHash, deviceId, ts, ts, tokenVersion)
     .run();
 }
 
@@ -130,14 +134,19 @@ export async function revokeEverything(db: D1Database, accountId: string): Promi
   return res.meta.changes ?? 0;
 }
 
-/** The live device and account behind a token hash, or null for anything revoked or unknown. */
+/**
+ * The live device and account behind a token hash, or null for anything
+ * revoked or unknown. Whether the token has gone unused too long is the
+ * caller's decision (tokenStanding in devices.ts), which is why its
+ * last_used_at comes back with it: null for a token nobody has stamped yet.
+ */
 export async function resolveDeviceToken(
   db: D1Database,
   tokenHash: string,
-): Promise<{ device: Device; account: Account } | null> {
+): Promise<{ device: Device; account: Account; lastUsedAt: string | null } | null> {
   const row = await db
     .prepare(
-      `SELECT d.id AS d_id, d.account_id AS d_account_id, d.name AS d_name, d.profile AS d_profile,
+      `SELECT t.last_used_at AS t_last_used_at, d.id AS d_id, d.account_id AS d_account_id, d.name AS d_name, d.profile AS d_profile,
               d.created_at AS d_created_at, d.last_seen_at AS d_last_seen_at,
               d.revoked_at AS d_revoked_at, a.*
          FROM device_tokens t
@@ -168,7 +177,12 @@ export async function resolveDeviceToken(
     last_signin_at: row.last_signin_at as string,
     token_version: Number(row.token_version ?? 0),
   };
-  return { device, account };
+  return { device, account, lastUsedAt: row.t_last_used_at ?? null };
+}
+
+/** Slide a token's idle window forward. Called at most once a day per token. */
+export async function touchDeviceToken(db: D1Database, tokenHash: string): Promise<void> {
+  await db.prepare("UPDATE device_tokens SET last_used_at = ? WHERE token_hash = ?").bind(now(), tokenHash).run();
 }
 
 export async function touchDevice(db: D1Database, deviceId: string): Promise<void> {

@@ -47,6 +47,7 @@ import * as db from "./db";
 import { revokeGrantAtGoogle } from "./drive";
 import type { Account, AppEnv, Bindings } from "./env";
 import { accountDeletedPage, deleteAccountPage, reauthToDeletePage, type DeletionSummary } from "./pages";
+import { log } from "./log";
 import { forgetRelay } from "./relay";
 import { browserOnly, clearSession, sameOrigin, sessionSignedInAt } from "./session";
 import { isLive } from "./stripe";
@@ -127,10 +128,10 @@ account.post("/account/delete", async (c) => {
   try {
     stripe = await leaveStripe(c.env, who.id);
     if (stripe.canceled) {
-      console.log(`account ${who.id}: canceled ${stripe.canceled} subscription(s) and refunded ${stripe.refunded} before deleting`);
+      log(`account ${who.id}: canceled ${stripe.canceled} subscription(s) and refunded ${stripe.refunded} before deleting`);
     }
   } catch (err) {
-    console.log(`account ${who.id}: deletion stopped, Stripe could not cancel: ${(err as Error).message}`);
+    log(`account ${who.id}: deletion stopped, Stripe could not cancel: ${(err as Error).message}`);
     return c.html(
       deleteAccountPage(
         who,
@@ -152,7 +153,7 @@ account.post("/account/delete", async (c) => {
   try {
     await db.deleteAccountData(c.env.DB, who.id, await trialHash(c.env.SESSION_SECRET, who.google_sub));
   } catch (err) {
-    console.log(`account ${who.id}: deleting the rows failed: ${(err as Error).message}`);
+    log(`account ${who.id}: deleting the rows failed: ${(err as Error).message}`);
     return c.html(
       deleteAccountPage(
         who,
@@ -170,12 +171,12 @@ account.post("/account/delete", async (c) => {
   // 4. The relay, best effort.
   await Promise.all(
     deviceIds.map((id) =>
-      forgetRelay(c.env, id).catch((err) => console.log(`account ${who.id}: relay for ${id} not cleared: ${(err as Error).message}`)),
+      forgetRelay(c.env, id).catch((err) => log(`account ${who.id}: relay for ${id} not cleared: ${(err as Error).message}`)),
     ),
   );
 
   // 5. Signed out, and told.
   clearSession(c);
-  console.log(`account ${who.id} deleted by its owner (${deviceIds.length} device(s))`);
+  log(`account ${who.id} deleted by its owner (${deviceIds.length} device(s))`);
   return c.html(accountDeletedPage(who.email, stripe));
 });

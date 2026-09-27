@@ -479,7 +479,7 @@ describe("deleting", () => {
       invoices: { [sub]: paidInvoice("in_fail", 1500, 10) },
       failRefund: true,
     });
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
     const res = await confirm(mine.cookie, "refund-fails@example.com");
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -490,18 +490,18 @@ describe("deleting", () => {
     expect(cancels(calls)).toEqual([sub]);
     expect(stripeDeletes(calls, "customers")).toEqual([`cus_${mine.account.id}`]);
     // Logged with Stripe's ids, since the account row is gone.
-    expect(errors.mock.calls.flat().join(" ")).toMatch(new RegExp(`REFUND OWED.*${sub}.*in_fail`));
-    errors.mockRestore();
+    expect(logs.mock.calls.flat().join(" ")).toMatch(new RegExp(`REFUND OWED.*${sub}.*in_fail`));
+    logs.mockRestore();
   });
 
   it("still deletes the account when Stripe will not delete the customer", async () => {
     const mine = await fullAccount("customer-stays@example.com");
     outside({ subs: {}, failCustomerDelete: true });
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
     expect((await confirm(mine.cookie, "customer-stays@example.com")).status).toBe(200);
     expect(await db.accountById(env.DB, mine.account.id)).toBeNull();
-    expect(errors.mock.calls.flat().join(" ")).toContain(`cus_${mine.account.id}`);
-    errors.mockRestore();
+    expect(logs.mock.calls.flat().join(" ")).toContain(`cus_${mine.account.id}`);
+    logs.mockRestore();
   });
 
   it("ends every device token, and signs the browser out", async () => {

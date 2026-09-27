@@ -68,6 +68,14 @@ minted at collection, so it exists in plain form only in the one response
 that carries it; the database keeps a SHA-256 of it. Removing a Mac on the
 account page, or `POST /device/revoke` from the panel itself, ends the token.
 
+A token also ends on its own after 90 days without use. The window slides:
+each use moves it forward (the stamp is written at most once a day per
+token), so a Mac in regular use stays signed in and a lost or abandoned one
+does not. An expired token gets the same 401 as a revoked one, with
+`{"error": "invalid_token", "reason": "token_expired"}`, and the panel
+answers any 401 on `/me` by forgetting the token and offering a fresh
+sign-in.
+
 - **Settings documents.** `GET` and `PUT /settings/:name` with the device
   bearer store small named texts per account and profile. The first is
   `schedule`, the panel's schedule file, so a class schedule follows its
@@ -125,8 +133,14 @@ when it was last connected, refreshing every 10 seconds; `/api/` paths get a
 JSON 503 with `relay: "not-connected"`. A request the panel does not answer
 in 25 seconds is a 504, and the socket is closed as dead, so a lid closed
 without a clean goodbye shows as not connected on the next request rather
-than hanging. The object hibernates between messages; the panel's pings are
-answered without waking it. The Durable Object class is SQLite-backed
+than hanging. The object hibernates between messages, and neither kind of
+keepalive wakes it. The WebSocket ping frames the panel sends today are
+answered by the Cloudflare runtime itself; they keep the path open and let the
+panel notice a dead link, but tell the service nothing. A panel may also send
+the text message `ping`, which the runtime answers with `pong` and timestamps;
+once a panel has done that, 90 seconds without one (three missed 30 second
+beats) and its socket is treated as dead: not connected on the account page and
+an immediate 503, not a 25 second wait. The Durable Object class is SQLite-backed
 (`new_sqlite_classes` in `wrangler.jsonc`), which every Workers plan allows.
 
 ## Running it
@@ -281,6 +295,17 @@ get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
 from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
 forgets it, which gives those people a trial again rather than locking anybody
 out.
+
+The Worker's logs are not the database, and they hold less. Cloudflare keeps
+them (Workers Logs, `wrangler tail`, any Logpush job) and anyone with
+dashboard access can read them, so a line names an account by its id and a
+Mac by its device id, never by an email address, a name, a Google subject,
+a Mac's name, an IP address, a token, or a query string. Every line goes
+through `src/log.ts`, which also scrubs anything shaped like an address, a
+key, or a query string out of error text that Google, Stripe, or D1 quoted
+back. `test/logs.test.ts` holds the source to that, and
+`test/no-pii-in-logs.ts` fails any test in the suite whose log lines carry
+an address or a secret. To find the person behind an id, look it up in D1.
 
 ## Billing
 

@@ -50,6 +50,7 @@ import { TRIAL_ALLOWANCE } from "./tiers";
 import type { AppEnv } from "./env";
 import { mp4DurationSeconds } from "./mp4";
 import { profileSpec, userMessage } from "./prompts";
+import { log } from "./log";
 
 // --- What is fixed here, and not by a caller --------------------------------
 
@@ -176,7 +177,7 @@ function refuse(c: Context<AppEnv>, r: Refusal) {
  * to tell a panel whether to retry, and enough to find the call in the logs.
  */
 function providerFailed(what: string, status: number): Refusal {
-  console.log(`proxy: ${what} answered ${status}`);
+  log(`proxy: ${what} answered ${status}`);
   if (status === 429) return { status: 429, body: { error: "provider_busy" }, headers: { "Retry-After": "30" } };
   return { status: 502, body: { error: "provider_unavailable" } };
 }
@@ -197,7 +198,7 @@ function overAllowance(kind: db.UsageKind, used: number, wanted: number, allowed
 }
 
 function ceilingReached(kind: db.UsageKind): Refusal {
-  console.log(`proxy: the ${kind} ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
+  log(`proxy: the ${kind} ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
   return {
     status: 402,
     body: { error: "service_ceiling", kind, period: db.usagePeriod() },
@@ -333,7 +334,7 @@ async function transcribeUpstream(
     try {
       res = await fetch(leg.url, { method: "POST", headers: { Authorization: `Bearer ${leg.key}` }, body: upstream });
     } catch {
-      console.log(`proxy: ${leg.what} could not be reached`);
+      log(`proxy: ${leg.what} could not be reached`);
       last = { what: leg.what, status: 0 };
       continue;
     }
@@ -342,7 +343,7 @@ async function transcribeUpstream(
     // Logged on every fall-through, because falling through to OpenAI costs
     // real money and a Groq key that has quietly stopped working should show
     // up here rather than on a card statement.
-    console.log(`proxy: ${leg.what} answered ${res.status}`);
+    log(`proxy: ${leg.what} answered ${res.status}`);
     last = { what: leg.what, status: res.status };
   }
   return { ok: false, ...last };
@@ -548,7 +549,7 @@ proxy.post("/proxy/summarize", async (c) => {
   const summary = block?.input as Record<string, unknown> | undefined;
   const written = typeof summary?.summary_md === "string" ? summary.summary_md.trim() : "";
   if (!written) {
-    console.log(`proxy: anthropic returned no summary (stop_reason=${answer?.stop_reason ?? "unknown"}, `
+    log(`proxy: anthropic returned no summary (stop_reason=${answer?.stop_reason ?? "unknown"}, `
       + `keys=${summary ? Object.keys(summary).join("|") || "none" : "no input"})`);
     return c.json({ error: "no_summary", stop_reason: answer?.stop_reason ?? "" }, 502);
   }
@@ -567,7 +568,7 @@ proxy.post("/proxy/summarize", async (c) => {
     && !(Array.isArray(summary?.key_terms) && summary.key_terms.length)
     && !(Array.isArray(summary?.action_items) && summary.action_items.length);
   if (leaked || hollow) {
-    console.log(`proxy: anthropic returned a malformed summary `
+    log(`proxy: anthropic returned a malformed summary `
       + `(${leaked ? `${leaked} in summary_md` : "no slug, terms or actions"}, `
       + `stop_reason=${answer?.stop_reason ?? "unknown"})`);
     return c.json({ error: "malformed_summary", stop_reason: answer?.stop_reason ?? "" }, 502);
