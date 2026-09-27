@@ -11,8 +11,11 @@
 //                          means every transcription goes to OpenAI.
 //   STRIPE_WEBHOOK_SECRET  what Stripe signs webhook deliveries with. Unset
 //                          means /stripe/webhook refuses every delivery.
-//   STRIPE_SECRET_KEY      the Stripe API key. The webhook never spends it;
-//                          Checkout and the Billing Portal will.
+//   STRIPE_SECRET_KEY      the Stripe API key. Checkout, the Billing Portal and
+//                          account deletion spend it; the webhook only does
+//                          for a subscription whose account was deleted.
+//   DRIVE_KEY_PREVIOUS     only during a DRIVE_KEY rotation: the key being
+//                          retired. See docs/drive-key-rotation.md.
 // For local dev, the same names go in .dev.vars, which is gitignored.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -40,6 +43,17 @@
   ],
   "vars": {
     "PUBLIC_URL": "https://syllabusaccounts.maincoursemedia.com",
+    // Where relayed panels are served, on an origin of their own, so a panel's
+    // scripts are never same-origin with the account pages (src/panel-host.ts).
+    // EMPTY on purpose: empty means panels stay at PUBLIC_URL/p/<device>/ as
+    // they always have. Before setting it, give the host to this Worker in
+    // Cloudflare (a custom domain or route) and check that
+    //   curl -s <PANEL_ORIGIN>/healthz
+    // answers {"ok":true}, which means the host reaches this Worker. Prefer a different registrable domain from
+    // PUBLIC_URL's; see PANEL_ORIGIN in src/env.ts for why. It must not be
+    // PUBLIC_URL's host, a parent of it, or a subdomain of it: those are
+    // refused and panels stop being served until it is fixed.
+    "PANEL_ORIGIN": "",
     // The Web OAuth client in Google Cloud project friendly-bazaar-507320-b7, the same
     // project as the Desktop client Syllabus ships for `intake login`, so a Drive grant
     // from either sees the same files (drive.file is scoped to the creating project).
@@ -62,5 +76,8 @@
     // while it is empty the top-up is simply not offered.
     "STRIPE_PRICE_TOPUP": ""
   },
+  // Hourly housekeeping (the scheduled handler in src/index.ts): seals Drive
+  // grants again under the current DRIVE_KEY and clears old rate-limit rows.
+  "triggers": { "crons": ["17 * * * *"] },
   "observability": { "enabled": true }
 }

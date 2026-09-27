@@ -134,7 +134,7 @@ describe("the sign-in routes", () => {
 
   it("signs out", async () => {
     const { cookie } = await signedInAs("me@example.com");
-    const res = await get("/logout", { Cookie: cookie });
+    const res = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-origin" });
     expect(res.status).toBe(200);
     expect(res.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
   });

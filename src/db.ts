@@ -104,9 +104,13 @@ export async function insertDeviceToken(
   deviceId: string,
   tokenVersion: number,
 ): Promise<void> {
+  // Handing a token out counts as its first use, so its idle window starts now.
+  const ts = now();
   await db
-    .prepare("INSERT INTO device_tokens (token_hash, device_id, created_at, token_version) VALUES (?, ?, ?, ?)")
-    .bind(tokenHash, deviceId, now(), tokenVersion)
+    .prepare(
+      "INSERT INTO device_tokens (token_hash, device_id, created_at, last_used_at, token_version) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(tokenHash, deviceId, ts, ts, tokenVersion)
     .run();
 }
 
@@ -130,14 +134,19 @@ export async function revokeEverything(db: D1Database, accountId: string): Promi
   return res.meta.changes ?? 0;
 }
 
-/** The live device and account behind a token hash, or null for anything revoked or unknown. */
+/**
+ * The live device and account behind a token hash, or null for anything
+ * revoked or unknown. Whether the token has gone unused too long is the
+ * caller's decision (tokenStanding in devices.ts), which is why its
+ * last_used_at comes back with it: null for a token nobody has stamped yet.
+ */
 export async function resolveDeviceToken(
   db: D1Database,
   tokenHash: string,
-): Promise<{ device: Device; account: Account } | null> {
+): Promise<{ device: Device; account: Account; lastUsedAt: string | null } | null> {
   const row = await db
     .prepare(
-      `SELECT d.id AS d_id, d.account_id AS d_account_id, d.name AS d_name, d.profile AS d_profile,
+      `SELECT t.last_used_at AS t_last_used_at, d.id AS d_id, d.account_id AS d_account_id, d.name AS d_name, d.profile AS d_profile,
               d.created_at AS d_created_at, d.last_seen_at AS d_last_seen_at,
               d.revoked_at AS d_revoked_at, a.*
          FROM device_tokens t
@@ -168,7 +177,12 @@ export async function resolveDeviceToken(
     last_signin_at: row.last_signin_at as string,
     token_version: Number(row.token_version ?? 0),
   };
-  return { device, account };
+  return { device, account, lastUsedAt: row.t_last_used_at ?? null };
+}
+
+/** Slide a token's idle window forward. Called at most once a day per token. */
+export async function touchDeviceToken(db: D1Database, tokenHash: string): Promise<void> {
+  await db.prepare("UPDATE device_tokens SET last_used_at = ? WHERE token_hash = ?").bind(now(), tokenHash).run();
 }
 
 export async function touchDevice(db: D1Database, deviceId: string): Promise<void> {
@@ -762,6 +776,15 @@ export async function stripeCustomerOf(db: D1Database, accountId: string): Promi
   return row?.stripe_customer_id ?? null;
 }
 
+/** Every Stripe customer linked to an account. Usually one, and never more than a handful. */
+export async function stripeCustomersOf(db: D1Database, accountId: string): Promise<string[]> {
+  const res = await db
+    .prepare("SELECT stripe_customer_id FROM stripe_customers WHERE account_id = ? ORDER BY created_at")
+    .bind(accountId)
+    .all<{ stripe_customer_id: string }>();
+  return res.results.map((r) => r.stripe_customer_id);
+}
+
 /** The account a Stripe customer belongs to, from the link made at checkout. */
 export async function accountIdForLinkedCustomer(db: D1Database, stripeCustomerId: string): Promise<string | null> {
   const row = await db
@@ -818,4 +841,86 @@ export async function recordTopup(
     .bind(stripeSessionId, accountId, period, audioSeconds, summaryTokens, now())
     .run();
   return (res.meta?.changes ?? 0) > 0;
+}
+
+// --- Deleting an account -----------------------------------------------------
+
+/** Every device an account ever had, removed ones included: each has a relay object to clear. */
+export async function allDeviceIdsOf(db: D1Database, accountId: string): Promise<string[]> {
+  const res = await db.prepare("SELECT id FROM devices WHERE account_id = ?").bind(accountId).all<{ id: string }>();
+  return res.results.map((r) => r.id);
+}
+
+/**
+ * Remove every row that belongs to an account, in one transaction.
+ *
+ * D1 runs a batch as a single transaction, so this either happens entirely or
+ * not at all: a failure halfway cannot leave an account with its devices gone
+ * and its settings still here. Children go before parents, so the result does
+ * not depend on foreign keys being enforced or on ON DELETE CASCADE.
+ *
+ * Kept, and why:
+ *
+ * - trial_used gains a keyed hash of the Google sub (never the sub or the
+ *   email), so signing in again does not hand out a second free trial.
+ * - stripe_events rows stay, with account_id blanked. The event id is what
+ *   stops a redelivered Stripe event being handled twice, it carries nothing
+ *   about the person, and blanking the account id leaves nothing that points
+ *   back at them. Stripe itself keeps the invoices and payments, which is
+ *   where the accounting record lives.
+ *
+ * Everything else with an account id in it goes, including usage (which is
+ * what the fleet-wide cost split and the global ceiling are summed from) and
+ * the rate-limit windows keyed by the account.
+ *
+ * Adding a table with an account id in it means adding it here; test/account.test.ts checks every table that
+ * has such a column, so it fails until this is updated.
+ */
+export async function deleteAccountData(db: D1Database, accountId: string, subHash: string): Promise<void> {
+  const devicesOfAccount = "SELECT id FROM devices WHERE account_id = ?";
+  await db.batch([
+    // The one thing that outlives the account; see migrations/0013. In the
+    // same transaction, so an account is never gone without it.
+    db.prepare("INSERT OR IGNORE INTO trial_used (sub_hash, created_at) VALUES (?, ?)").bind(subHash, now()),
+    db.prepare(`DELETE FROM device_tokens WHERE device_id IN (${devicesOfAccount})`).bind(accountId),
+    db
+      .prepare(`DELETE FROM device_codes WHERE approved_account_id = ? OR approved_device_id IN (${devicesOfAccount})`)
+      .bind(accountId, accountId),
+    db.prepare("DELETE FROM devices WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM settings WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM drive_grants WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM usage WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM allowances WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM topups WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM subscriptions WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM stripe_customers WHERE account_id = ?").bind(accountId),
+    // Buckets are "<kind>:<account id>". A suffix compare rather than LIKE,
+    // because an account id is base64url and "_" is a LIKE wildcard.
+    db
+      .prepare("DELETE FROM rate_limits WHERE substr(bucket, -length(?) - 1) = ':' || ?")
+      .bind(accountId, accountId),
+    db.prepare("UPDATE stripe_events SET account_id = '' WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM accounts WHERE id = ?").bind(accountId),
+  ]);
+}
+
+/** Whether a Google identity (as its trialHash) already spent a trial on a deleted account. */
+export async function trialWasUsed(db: D1Database, subHash: string): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS used FROM trial_used WHERE sub_hash = ?").bind(subHash).first();
+  return row !== null;
+}
+
+/**
+ * Give an account the zero allowance of a repeat trial, unless it already has
+ * a row. INSERT OR IGNORE, so a paid plan written by the webhook is never
+ * overwritten by a later sign-in.
+ */
+export async function blockTrial(db: D1Database, accountId: string, grant: AllowanceGrant): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO allowances (account_id, audio_seconds, summary_tokens, assistant_sessions, source, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(accountId, grant.audio_seconds, grant.summary_tokens, grant.assistant_sessions, grant.source, now())
+    .run();
 }

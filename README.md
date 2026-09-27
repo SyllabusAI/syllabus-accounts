@@ -24,6 +24,31 @@ their Google Drive grant.
 - **Reach a panel over the web.** `/p/<device>/` relays a signed-in
   browser to that Mac's panel over a Durable Object socket, when the account
   owns it. Anyone else is told the panel is not theirs.
+- **Delete the account.** `/account/delete` (signed in with Google within the
+  last 10 minutes, or it asks you to sign in again) says what goes and asks
+  for the account's email typed back. The `POST` cancels any live Stripe
+  subscription first, and deletes nothing if Stripe cannot do that. It refunds
+  the unused share of the latest paid invoice to the card and deletes every
+  linked Stripe customer (the saved card and contact details; Stripe keeps its
+  own invoices and payments). A refund or customer deletion that fails does not
+  stop the deletion; it is logged with Stripe's ids (`REFUND OWED` for a
+  refund) to finish from the dashboard. Then it deletes every row that names
+  the account in one D1 transaction (so every device token dies with it),
+  revokes the Drive grant at Google, drops each Mac's relay socket, and signs
+  the browser out. Two things stay: `stripe_events`
+  rows with the account id blanked, so a redelivered webhook is still
+  recognized, and one row in `trial_used`, a keyed HMAC of the Google `sub`
+  (never the sub or the email). Signing in again with the same Google account
+  starts a new, empty account with no free trial: it gets an allowance row of
+  zeros (`source = 'trial_used'`) instead of the trial a missing row means,
+  and Checkout starts its plan without a Stripe trial. Paid plans work as for
+  anybody else. An account that has held a subscription before gets no second
+  Stripe trial either, so canceling and subscribing again is not a way around it.
+  A Checkout that was open in another tab and finishes after the deletion
+  starts a subscription for an account that is gone; the webhook sees the
+  stamped account is missing, cancels and refunds that subscription, and
+  deletes its customer unless a live account still uses it. A top-up paid
+  that way is refunded in full.
 
 ## The device flow
 
@@ -42,6 +67,14 @@ Codes live fifteen minutes; the poll interval is five seconds. The token is
 minted at collection, so it exists in plain form only in the one response
 that carries it; the database keeps a SHA-256 of it. Removing a Mac on the
 account page, or `POST /device/revoke` from the panel itself, ends the token.
+
+A token also ends on its own after 90 days without use. The window slides:
+each use moves it forward (the stamp is written at most once a day per
+token), so a Mac in regular use stays signed in and a lost or abandoned one
+does not. An expired token gets the same 401 as a revoked one, with
+`{"error": "invalid_token", "reason": "token_expired"}`, and the panel
+answers any 401 on `/me` by forgetting the token and offering a fresh
+sign-in.
 
 - **Settings documents.** `GET` and `PUT /settings/:name` with the device
   bearer store small named texts per account and profile. The first is
@@ -100,9 +133,57 @@ when it was last connected, refreshing every 10 seconds; `/api/` paths get a
 JSON 503 with `relay: "not-connected"`. A request the panel does not answer
 in 25 seconds is a 504, and the socket is closed as dead, so a lid closed
 without a clean goodbye shows as not connected on the next request rather
-than hanging. The object hibernates between messages; the panel's pings are
-answered without waking it. The Durable Object class is SQLite-backed
+than hanging. The object hibernates between messages, and neither kind of
+keepalive wakes it. The WebSocket ping frames the panel sends today are
+answered by the Cloudflare runtime itself; they keep the path open and let the
+panel notice a dead link, but tell the service nothing. A panel may also send
+the text message `ping`, which the runtime answers with `pong` and timestamps;
+once a panel has done that, 90 seconds without one (three missed 30 second
+beats) and its socket is treated as dead: not connected on the account page and
+an immediate 503, not a 25 second wait. The Durable Object class is SQLite-backed
 (`new_sqlite_classes` in `wrangler.jsonc`), which every Workers plan allows.
+
+### The panel host (`PANEL_ORIGIN`)
+
+A panel page is HTML the Mac wrote, with inline scripts, and anybody holding
+that Mac's device token can be the Mac. Served under `PUBLIC_URL` it is
+same-origin with the account pages, so its script could read `/`, post
+`/device/approve`, `/devices/:id/revoke`, `/drive/disconnect` or the billing
+forms with a correct `Origin`, and `browserOnly()` plus `sameOrigin()` would
+let it. `PANEL_ORIGIN` moves panels to an origin of their own
+(`src/panel-host.ts`):
+
+```
+browser -> PUBLIC_URL/p/<d>/setup            signed in, owns <d>
+        <- 302 PANEL_ORIGIN/p/<d>/_auth?t=<ticket>   (60 s, single use, HMAC, account + device)
+browser -> PANEL_ORIGIN/p/<d>/_auth?t=...    ticket checked and spent (D1 panel_tickets)
+        <- 302 /p/<d>/setup  + Set-Cookie syllabus_panel; Path=/p/<d>/; HttpOnly; Secure; SameSite=Lax
+browser -> PANEL_ORIGIN/p/<d>/setup          relayed, viewer named from the panel cookie
+```
+
+The panel host answers `/p/...` and nothing else: every account, billing,
+device and relay route is a 404 there, and bearer tokens are not read. The
+account host never serves panel content once it is set, and `sameOrigin()`
+refuses anything from the panel host. The session cookie is host-only, so it
+never reaches the panel host. The welcome frame tells the Mac its
+`panel_url`, on the panel host.
+
+Unset (the default), nothing changes. To turn it on:
+
+1. Give a host to this Worker in Cloudflare: a Custom Domain (Workers ->
+   syllabus-accounts -> Settings -> Domains & Routes), or a route on a zone
+   you already have. Prefer a different registrable domain from
+   `PUBLIC_URL`'s; a sibling subdomain works but stays same-site, see
+   `PANEL_ORIGIN` in `src/env.ts`. It may not be `PUBLIC_URL`'s host, a
+   parent of it, or a subdomain of it; those are refused and nothing is
+   relayed until fixed.
+2. Check that `curl -s https://<panel host>/healthz` answers `{"ok":true}`.
+   While PANEL_ORIGIN is still empty that host is served as the account
+   app, which is how you know it reaches this Worker. (Once it is set,
+   `/healthz` there is a 404, like everything but `/p/`.)
+3. Set `"PANEL_ORIGIN": "https://<panel host>"` in `wrangler.jsonc`, run
+   `npm run types`, and merge. Old `PUBLIC_URL/p/<d>/` links keep working:
+   they hand over to the panel host.
 
 ## Running it
 
@@ -135,8 +216,13 @@ npx wrangler secret put SESSION_SECRET
 npx wrangler secret put DRIVE_KEY
 ```
 
-Changing `DRIVE_KEY` makes every stored Drive grant unreadable; people
-would reconnect Drive from the account page.
+Replacing `DRIVE_KEY` outright would make every stored Drive grant
+unreadable. Rotate it with `DRIVE_KEY_PREVIOUS` instead, which nobody
+notices: [docs/drive-key-rotation.md](docs/drive-key-rotation.md). The
+hourly cron in `wrangler.jsonc` is what finishes a rotation.
+
+What the service protects, from whom, and how each route is authenticated:
+[docs/threat-model.md](docs/threat-model.md).
 
 The Worker's route is a custom domain, so `wrangler deploy` also creates the
 DNS record. The Google side is a **Web application** OAuth client in Google
@@ -278,6 +364,23 @@ records every webhook event id so a retried delivery is handled once, and
 `stripe_customers` is which account a Stripe customer is. None of them carries
 a card number or anything else about a payment method; Stripe holds all of
 that.
+
+`trial_used` holds one row per deleted account whose Google identity must not
+get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
+from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
+forgets it, which gives those people a trial again rather than locking anybody
+out.
+
+The Worker's logs are not the database, and they hold less. Cloudflare keeps
+them (Workers Logs, `wrangler tail`, any Logpush job) and anyone with
+dashboard access can read them, so a line names an account by its id and a
+Mac by its device id, never by an email address, a name, a Google subject,
+a Mac's name, an IP address, a token, or a query string. Every line goes
+through `src/log.ts`, which also scrubs anything shaped like an address, a
+key, or a query string out of error text that Google, Stripe, or D1 quoted
+back. `test/logs.test.ts` holds the source to that, and
+`test/no-pii-in-logs.ts` fails any test in the suite whose log lines carry
+an address or a secret. To find the person behind an id, look it up in D1.
 
 ## Billing
 

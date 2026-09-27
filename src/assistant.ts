@@ -60,6 +60,7 @@
 import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { log } from "./log";
 import { allowanceFor, boundedBody, isRefusal, label, providerFailed, refuse, type Refusal } from "./proxy";
 import { now, randomId } from "./util";
 
@@ -619,7 +620,7 @@ async function relayStream(
             takeUsage(ev.usage);
             break;
           case "error":
-            console.log(`assistant: the provider stream failed (${ev.error?.type ?? "unknown"})`);
+            log(`assistant: the provider stream failed (${ev.error?.type ?? "unknown"})`);
             failed = true;
             break;
         }
@@ -697,7 +698,7 @@ assistant.post("/proxy/assistant", async (c) => {
 
   const allowed = await allowanceFor(c.env.DB, account.id);
   if ((await db.usedGlobally(c.env.DB, "assistant")) + estimate > ASSISTANT_CEILING) {
-    console.log(`assistant: the ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
+    log(`assistant: the ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
     return c.json({ error: "service_ceiling", kind: "assistant", period: db.usagePeriod() }, 402);
   }
 

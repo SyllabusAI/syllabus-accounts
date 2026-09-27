@@ -19,6 +19,8 @@ export default defineConfig(async () => {
             GOOGLE_CLIENT_SECRET: "test-client-secret",
             SESSION_SECRET: "test-session-secret-long-enough-to-sign-with",
             DRIVE_KEY: "test-drive-key",
+            // Set in tests so a rotation can be exercised end to end (drive-keys.ts).
+            DRIVE_KEY_PREVIOUS: "test-drive-key-previous",
             OPENAI_API_KEY: "sk-test-openai",
             GROQ_API_KEY: "gsk-test-groq",
             ANTHROPIC_API_KEY: "sk-ant-test",
@@ -33,7 +35,7 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
-      setupFiles: ["./test/apply-migrations.ts"],
+      setupFiles: ["./test/apply-migrations.ts", "./test/no-pii-in-logs.ts"],
     },
   };
 });
