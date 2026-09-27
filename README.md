@@ -68,6 +68,14 @@ minted at collection, so it exists in plain form only in the one response
 that carries it; the database keeps a SHA-256 of it. Removing a Mac on the
 account page, or `POST /device/revoke` from the panel itself, ends the token.
 
+A token also ends on its own after 90 days without use. The window slides:
+each use moves it forward (the stamp is written at most once a day per
+token), so a Mac in regular use stays signed in and a lost or abandoned one
+does not. An expired token gets the same 401 as a revoked one, with
+`{"error": "invalid_token", "reason": "token_expired"}`, and the panel
+answers any 401 on `/me` by forgetting the token and offering a fresh
+sign-in.
+
 - **Settings documents.** `GET` and `PUT /settings/:name` with the device
   bearer store small named texts per account and profile. The first is
   `schedule`, the panel's schedule file, so a class schedule follows its

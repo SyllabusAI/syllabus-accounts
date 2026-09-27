@@ -24,6 +24,34 @@ export const POLL_INTERVAL = 5;
 const PROFILES = new Set(["syllabus", "sous"]);
 
 /**
+ * How long a device token lives without being used.
+ *
+ * The window slides: every use moves it forward, so a Mac that runs Syllabus
+ * at least once a quarter is never signed out, while a token on a Mac that
+ * was lost, sold or wiped dies on its own instead of waiting for its owner to
+ * remember it. Sliding is recorded at most once per TOKEN_TOUCH_SECONDS, so
+ * a panel polling all day costs one D1 write a day, not one per request; the
+ * cost is that the window can end up to a day earlier than the last request.
+ */
+export const TOKEN_IDLE_DAYS = 90;
+export const TOKEN_TOUCH_SECONDS = 24 * 60 * 60;
+
+/**
+ * What to do with a token that otherwise checks out, given when it was last
+ * stamped as used. A null stamp is a token minted before stamping existed
+ * (or in the minute between the migration and the deploy); it counts as used
+ * just now, so nobody is signed out by the change, and gets stamped.
+ */
+export function tokenStanding(lastUsedAt: string | null, nowMs = Date.now()): "live" | "touch" | "expired" {
+  if (lastUsedAt === null) return "touch";
+  const last = Date.parse(lastUsedAt);
+  if (Number.isNaN(last)) return "touch";
+  const idle = nowMs - last;
+  if (idle > TOKEN_IDLE_DAYS * 86_400_000) return "expired";
+  return idle >= TOKEN_TOUCH_SECONDS * 1000 ? "touch" : "live";
+}
+
+/**
  * What the two open routes allow, and why they need anything at all.
  *
  * /device/start and /device/poll are the only routes here that answer before

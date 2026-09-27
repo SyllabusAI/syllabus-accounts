@@ -15,7 +15,7 @@
 import { Hono } from "hono";
 import { account } from "./account";
 import * as db from "./db";
-import { devices } from "./devices";
+import { devices, TOKEN_IDLE_DAYS, tokenStanding } from "./devices";
 import type { AppEnv } from "./env";
 import { google } from "./google";
 import { accountPage, landing, privacyPage, termsPage } from "./pages";
@@ -45,8 +45,29 @@ app.use("*", async (c, next) => {
   c.set("authKind", null);
   const auth = c.req.header("Authorization") ?? "";
   if (auth.startsWith("Bearer " + DEVICE_TOKEN_PREFIX)) {
-    const found = await db.resolveDeviceToken(c.env.DB, await sha256Hex(auth.slice(7)));
+    const tokenHash = await sha256Hex(auth.slice(7));
+    const found = await db.resolveDeviceToken(c.env.DB, tokenHash);
     if (!found) return c.json({ error: "invalid_token" }, 401);
+    // Every bearer route passes through here, so this one check covers /me,
+    // /settings, /drive/token, /proxy/*, /relay/connect and /device/revoke.
+    // Same status and error as any dead token, because the panel already
+    // treats a 401 as "forget the token and offer a fresh sign-in"
+    // (whoami in intake/account.py); `reason` says which kind of dead.
+    const standing = tokenStanding(found.lastUsedAt);
+    if (standing === "expired") {
+      return c.json(
+        {
+          error: "invalid_token",
+          reason: "token_expired",
+          message: `This Mac's sign-in went unused for ${TOKEN_IDLE_DAYS} days and has expired. Sign in again from Syllabus.`,
+        },
+        401,
+        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="token expired"' },
+      );
+    }
+    // Awaited rather than left to waitUntil: it happens once a day per
+    // token, and a stamp that lands is what keeps an active Mac signed in.
+    if (standing === "touch") await db.touchDeviceToken(c.env.DB, tokenHash);
     c.set("account", found.account);
     c.set("device", found.device);
     c.set("authKind", "device");
