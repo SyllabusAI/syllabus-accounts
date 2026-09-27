@@ -20,14 +20,34 @@
  *
  * With no socket, or a socket that does not answer, the browser gets a page
  * saying the Mac is not connected rather than a timeout. The object sleeps
- * (hibernates) between messages; pings from the panel are answered without
- * waking it.
+ * (hibernates) between messages.
+ *
+ * Keepalive, two kinds, neither of which wakes the object:
+ *
+ *   protocol pings   WebSocket ping control frames, which is what the panel
+ *                    sends today (websocket-client's run_forever(ping_interval=30)).
+ *                    The Cloudflare runtime answers them with a pong itself;
+ *                    they never reach webSocketMessage and leave no trace
+ *                    here. They keep the path open and let the PANEL notice a
+ *                    dead link (its ping_timeout). They tell this object
+ *                    nothing.
+ *   text "ping"      an ordinary text message whose whole body is `ping`,
+ *                    answered with the text `pong` by the auto-response set in
+ *                    the constructor. The runtime records when it last did
+ *                    that (getWebSocketAutoResponseTimestamp), which is the
+ *                    only liveness signal this object can read without being
+ *                    woken for every heartbeat. A panel that has sent one is
+ *                    held to it: silent for PANEL_SILENCE_MS and its socket is
+ *                    treated as dead (see livePanel). A panel that never sends
+ *                    one, which is every panel before LectureAI adds it, is
+ *                    judged only by the request timeout, as before.
  */
 
 import { DurableObject } from "cloudflare:workers";
 import type { Bindings } from "./env";
 import { panelNotConnectedPage } from "./pages";
 import { fromBase64, now, randomId, toBase64 } from "./util";
+import { log } from "./log";
 
 /** How long a relayed request may wait for the panel before it is a 504 and the socket is presumed dead. */
 export const REQUEST_TIMEOUT_MS = 25_000;
@@ -35,6 +55,17 @@ export const REQUEST_TIMEOUT_MS = 25_000;
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** The most a browser may send to the panel. The panel's forms are small JSON. */
 export const MAX_BODY_BYTES = 64 * 1024;
+/**
+ * How long a panel that sends text heartbeats may go without one before its
+ * socket is presumed dead: three missed beats at the panel's 30 second pace.
+ * A lid closed without a goodbye then reads as not connected on the account
+ * page and gets an immediate 503, instead of "Connected now" and a 25 second
+ * wait for a 504.
+ */
+export const PANEL_SILENCE_MS = 90_000;
+/** The text heartbeat and its answer, handled by the runtime without waking the object. */
+export const HEARTBEAT = "ping";
+export const HEARTBEAT_REPLY = "pong";
 /** What the panel should split responses at. Told to the panel in the welcome frame. */
 export const CHUNK_BYTES = 256 * 1024;
 
@@ -82,8 +113,9 @@ export class PanelRelay extends DurableObject<Bindings> {
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
-    // The panel pings to keep NATs and sleepy links honest; answer without waking.
-    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    // Only for the text heartbeat. Protocol ping frames, which is what the
+    // panel sends now, are answered by the runtime and never match this.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT, HEARTBEAT_REPLY));
   }
 
   private async state(): Promise<RelayState> {
@@ -98,16 +130,62 @@ export class PanelRelay extends DurableObject<Bindings> {
     return this.ctx.getWebSockets("panel")[0] ?? null;
   }
 
+  /**
+   * The panel's socket if it is plausibly alive. One whose panel has sent text
+   * heartbeats and then stopped for PANEL_SILENCE_MS is closed and recorded
+   * as gone here, the way a request timeout would, without waiting for one.
+   */
+  private async livePanel(): Promise<WebSocket | null> {
+    const ws = this.panel();
+    if (!ws) return null;
+    const heard = this.ctx.getWebSocketAutoResponseTimestamp(ws);
+    if (!heard || Date.now() - heard.getTime() <= PANEL_SILENCE_MS) return ws;
+    try {
+      ws.close(1011, "no heartbeat from the panel");
+    } catch {
+      /* already gone */
+    }
+    await this.gone(ws, `presumed dead: no heartbeat since ${heard.toISOString()}`);
+    return null;
+  }
+
   /** For the account page and the panel's own Setup page: is the Mac here right now. */
   async describe(): Promise<RelayState & { connected: boolean }> {
-    return { ...(await this.state()), connected: this.panel() !== null };
+    const connected = (await this.livePanel()) !== null;
+    return { ...(await this.state()), connected };
   }
 
   async fetch(request: Request): Promise<Response> {
     const op = request.headers.get("X-Relay-Op") ?? "";
     if (op === "connect") return this.acceptPanel(request);
     if (op === "state") return Response.json(await this.describe());
+    if (op === "forget") return this.forget();
     return this.relay(request);
+  }
+
+  /**
+   * The device's account was deleted: drop the panel's socket and what this
+   * object remembers about it (the Mac's name, when it last connected).
+   *
+   * Only the Worker reaches this: the relay route builds its own headers for
+   * the object and never carries X-Relay-Op from a browser. The panel sees
+   * the close and tries to reconnect, and its token no longer resolves, so it
+   * is refused at /relay/connect before it gets here. The close handler may
+   * write a bare disconnected_at back afterwards; that is a timestamp with no
+   * name beside it.
+   */
+  private async forget(): Promise<Response> {
+    const state = await this.state();
+    for (const ws of this.ctx.getWebSockets("panel")) {
+      try {
+        ws.close(4001, "this account was deleted");
+      } catch {
+        /* already closed */
+      }
+    }
+    for (const id of [...this.pending.keys()]) this.finish(id, this.notConnected(state, "/api/"));
+    await this.ctx.storage.deleteAll();
+    return Response.json({ ok: true });
   }
 
   // --- The panel's socket -------------------------------------------------------
@@ -184,7 +262,7 @@ export class PanelRelay extends DurableObject<Bindings> {
       /* already closed */
     }
     if (this.panel() !== null) return; // replaced, not gone
-    console.log(`panel socket ${why}`);
+    log(`panel socket ${why}`);
     await this.update({ disconnected_at: now() });
     const state = await this.state();
     for (const id of [...this.pending.keys()]) this.finish(id, this.notConnected(state, "/api/"));
@@ -194,7 +272,7 @@ export class PanelRelay extends DurableObject<Bindings> {
 
   private async relay(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const ws = this.panel();
+    const ws = await this.livePanel();
     if (!ws) return this.notConnected(await this.state(), url.pathname);
     const id = randomId(9);
     const headers: Record<string, string> = {};
@@ -228,7 +306,7 @@ export class PanelRelay extends DurableObject<Bindings> {
       const p = this.pending.get(id);
       if (p) clearTimeout(p.timer);
       this.pending.delete(id);
-      console.log(`could not send to the panel: ${err instanceof Error ? err.message : String(err)}`);
+      log(`could not send to the panel: ${err instanceof Error ? err.message : String(err)}`);
       return this.notConnected(await this.state(), url.pathname);
     }
     return answer;
@@ -237,7 +315,7 @@ export class PanelRelay extends DurableObject<Bindings> {
   /** The Mac did not answer in time: it has probably gone to sleep with the socket half open. */
   private async timedOut(id: string, ws: WebSocket): Promise<void> {
     if (!this.pending.has(id)) return;
-    console.log(`panel did not answer request ${id} in ${REQUEST_TIMEOUT_MS} ms; closing its socket`);
+    log(`panel did not answer request ${id} in ${REQUEST_TIMEOUT_MS} ms; closing its socket`);
     this.finish(
       id,
       new Response("The Mac running this Syllabus did not answer. It may have gone to sleep. Try again in a moment.", {

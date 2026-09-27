@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIMITS, type Limit } from "../src/limits";
-import { claimDevice, get, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
+import { claimDevice, freezeClockJustBeforeAWindowEnds, get, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
 
 describe("claiming a panel", () => {
   it("hands out a code a person can type", async () => {
@@ -207,6 +207,14 @@ describe("signing out every Mac", () => {
  */
 describe("the open device routes have a limit", () => {
   const from = (ip: string) => ({ "CF-Connecting-IP": ip });
+  // These count against fixed windows, and a slow run that crossed a window
+  // boundary once reset the poll count and never saw slow_down (CI, 4.8 s).
+  beforeEach(() => {
+    freezeClockJustBeforeAWindowEnds();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   /** Fill a bucket to its limit in this window and the next, as security.test.ts does. */
   async function fill(bucket: string, rule: Limit, count = rule.limit) {
@@ -241,7 +249,7 @@ describe("the open device routes have a limit", () => {
     // A different Mac somewhere else is unaffected by that one's behavior.
     const elsewhere = await postJson("/device/start", { name: "Innocent" }, from("198.51.100.8"));
     expect(elsewhere.status).toBe(200);
-  });
+  }, 30_000);
 
   it("lets a whole lecture hall on one campus /64 pair at once", async () => {
     // Every Mac on the campus network shares one /64, the key the limit uses.

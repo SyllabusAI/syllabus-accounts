@@ -18,11 +18,13 @@
 
 import { Hono, type Context } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { applyTrialBlock } from "./account";
 import { upsertAccount } from "./db";
 import { finishConnect } from "./drive";
 import type { AppEnv } from "./env";
 import { page } from "./pages";
 import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
+import { log } from "./log";
 import { clearSession, sameOrigin, sessionSecret, setSession } from "./session";
 import { fromBase64Url, randomId, toBase64Url } from "./util";
 
@@ -191,7 +193,7 @@ google.get(CALLBACK_PATH, async (c) => {
     claims = decodeClaims(body.id_token);
     checkClaims(claims, c.env.GOOGLE_CLIENT_ID, flow.nonce);
   } catch (err) {
-    console.log(`sign-in failed: ${(err as Error).message}`);
+    log(`sign-in failed: ${(err as Error).message}`);
     return c.html(page("Sign in", "<p>The sign-in could not be checked with Google.</p><p><a href='/login'>Try again</a></p>"), 502);
   }
 
@@ -201,7 +203,9 @@ google.get(CALLBACK_PATH, async (c) => {
     name: claims.name ?? "",
     picture: claims.picture ?? "",
   });
-  console.log(`signed in: ${account.email}`);
+  // A Google identity that deleted an account after its trial gets no second one.
+  await applyTrialBlock(c.env, account.id, claims.sub);
+  log(`signed in: account ${account.id}`);
   deleteCookie(c, FLOW_COOKIE, { path: "/" });
   await setSession(c, account.id);
   return c.redirect(flow.next);

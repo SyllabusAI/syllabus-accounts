@@ -47,6 +47,18 @@ backport to.
 - The stored Google Drive grant and the refresh token behind it.
 - Schedule sync and any other account data in D1, including cross-account
   reads and injection into queries.
+- Account deletion (`/account/delete`): whether anything that names a deleted
+  account survives it beyond the keyed hash in `trial_used`, and whether that
+  hash can be tied back to a person without the Worker's secret.
+
+## What the logs hold
+
+Account ids and device ids, and nothing that names a person. Worker logs
+are retained by Cloudflare and visible to anyone with access to the
+account's dashboard, so no log line carries an email address, a name, a
+Google subject, an IP address, a device or Drive token, an OAuth code, an API
+key, or a URL's query string. A log line that does is a bug worth
+reporting.
 
 ## Out of scope
 

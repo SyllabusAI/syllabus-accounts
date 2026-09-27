@@ -11,8 +11,9 @@
 //                          means every transcription goes to OpenAI.
 //   STRIPE_WEBHOOK_SECRET  what Stripe signs webhook deliveries with. Unset
 //                          means /stripe/webhook refuses every delivery.
-//   STRIPE_SECRET_KEY      the Stripe API key. The webhook never spends it;
-//                          Checkout and the Billing Portal will.
+//   STRIPE_SECRET_KEY      the Stripe API key. Checkout, the Billing Portal and
+//                          account deletion spend it; the webhook only does
+//                          for a subscription whose account was deleted.
 //   DRIVE_KEY_PREVIOUS     only during a DRIVE_KEY rotation: the key being
 //                          retired. See docs/drive-key-rotation.md.
 // For local dev, the same names go in .dev.vars, which is gitignored.

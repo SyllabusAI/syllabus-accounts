@@ -10,6 +10,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { accountById } from "./db";
 import type { AppEnv } from "./env";
+import { log } from "./log";
 
 export const SESSION_COOKIE = "syllabus_accounts_session";
 export const SESSION_DAYS = 30;
@@ -46,22 +47,39 @@ export function clearSession(c: Context<AppEnv>): void {
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
 }
 
-/** The account id a valid, unexpired session cookie names, or "". */
-export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
+/** A valid, unexpired session cookie's contents, or null. */
+async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   if (!c.env.SESSION_SECRET) {
-    console.log("SESSION_SECRET is not set; every session reads as signed out");
-    return "";
+    log("SESSION_SECRET is not set; every session reads as signed out");
+    return null;
   }
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!raw) return "";
+  if (!raw) return null;
   try {
     const data = JSON.parse(raw) as SessionData;
-    if (typeof data.a !== "string" || typeof data.t !== "number") return "";
-    if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return "";
-    return data.a;
+    if (typeof data.a !== "string" || typeof data.t !== "number") return null;
+    if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return null;
+    return data;
   } catch {
-    return "";
+    return null;
   }
+}
+
+/** The account id a valid, unexpired session cookie names, or "". */
+export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
+  return (await readSession(c))?.a ?? "";
+}
+
+/**
+ * When the browser last signed in with Google, in ms since the epoch, or 0.
+ *
+ * The cookie is only ever written by the sign-in callback, and every sign-in
+ * goes through Google's account chooser (prompt=select_account in
+ * google.ts), which a person has to click. So a recent value means a person
+ * was at Google a moment ago, which no script on this origin can arrange.
+ */
+export async function sessionSignedInAt(c: Context<AppEnv>): Promise<number> {
+  return (await readSession(c))?.t ?? 0;
 }
 
 /** Sets c.var.account from the session cookie; never refuses on its own. */

@@ -13,8 +13,9 @@
  */
 
 import { Hono } from "hono";
+import { account } from "./account";
 import * as db from "./db";
-import { devices } from "./devices";
+import { devices, TOKEN_IDLE_DAYS, tokenStanding } from "./devices";
 import type { AppEnv } from "./env";
 import { google } from "./google";
 import { accountPage, landing, privacyPage, termsPage } from "./pages";
@@ -29,6 +30,7 @@ import type { Bindings } from "./env";
 import { bodyCap, securityHeaders } from "./headers";
 import { sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
+import { log } from "./log";
 
 const app = new Hono<AppEnv>();
 
@@ -52,8 +54,29 @@ app.use("*", async (c, next) => {
   c.set("authKind", null);
   const auth = c.req.header("Authorization") ?? "";
   if (auth.startsWith("Bearer " + DEVICE_TOKEN_PREFIX)) {
-    const found = await db.resolveDeviceToken(c.env.DB, await sha256Hex(auth.slice(7)));
+    const tokenHash = await sha256Hex(auth.slice(7));
+    const found = await db.resolveDeviceToken(c.env.DB, tokenHash);
     if (!found) return c.json({ error: "invalid_token" }, 401);
+    // Every bearer route passes through here, so this one check covers /me,
+    // /settings, /drive/token, /proxy/*, /relay/connect and /device/revoke.
+    // Same status and error as any dead token, because the panel already
+    // treats a 401 as "forget the token and offer a fresh sign-in"
+    // (whoami in intake/account.py); `reason` says which kind of dead.
+    const standing = tokenStanding(found.lastUsedAt);
+    if (standing === "expired") {
+      return c.json(
+        {
+          error: "invalid_token",
+          reason: "token_expired",
+          message: `This Mac's sign-in went unused for ${TOKEN_IDLE_DAYS} days and has expired. Sign in again from Syllabus.`,
+        },
+        401,
+        { "WWW-Authenticate": 'Bearer error="invalid_token", error_description="token expired"' },
+      );
+    }
+    // Awaited rather than left to waitUntil: it happens once a day per
+    // token, and a stamp that lands is what keeps an active Mac signed in.
+    if (standing === "touch") await db.touchDeviceToken(c.env.DB, tokenHash);
     c.set("account", found.account);
     c.set("device", found.device);
     c.set("authKind", "device");
@@ -109,6 +132,7 @@ app.post("/device/revoke", async (c) => {
 });
 
 app.route("/", google);
+app.route("/", account);
 app.route("/", devices);
 app.route("/", relay);
 app.route("/", settings);
@@ -118,7 +142,7 @@ app.route("/", proxy);
 
 app.notFound((c) => c.text("Not found", 404));
 app.onError((err, c) => {
-  console.log(`error: ${err.message}`);
+  log(`error: ${err.message}`);
   return c.text("Something went wrong", 500);
 });
 
@@ -136,7 +160,7 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
     (async () => {
       const sweep = await sweepDriveGrants(env);
       if (sweep.resealed || sweep.unreadable || sweep.remaining) {
-        console.log(
+        log(
           `drive keys: resealed ${sweep.resealed}, unreadable ${sweep.unreadable}, ` +
             `${sweep.remaining} not yet under the current DRIVE_KEY`,
         );
