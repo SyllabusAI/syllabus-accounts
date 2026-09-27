@@ -219,7 +219,7 @@ describe("rate limits on the routes that answer strangers", () => {
 
   it("still never answers /device/poll with a 429", async () => {
     const ip = "198.51.100.50";
-    await fill(`device-poll:${ip}`, { limit: 60, window: 60 });
+    await fill(`device-poll:${ip}`, LIMITS.devicePoll);
     const res = await postJson("/device/poll", { device_code: "x" }, { "CF-Connecting-IP": ip });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("slow_down");

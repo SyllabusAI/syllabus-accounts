@@ -62,8 +62,7 @@ describe("an IPv6 client cannot step around a per-address limit", () => {
   });
 
   it("stops one /64 from allocating device claims by rotating addresses", async () => {
-    // devices.ts allows 10 claims per 10 minutes per source.
-    await fill("device-start:2001:db8:bb:1::/64", { limit: 10, window: 600 });
+    await fill("device-start:2001:db8:bb:1::/64", LIMITS.deviceStart);
     const res = await postJson("/device/start", { name: "Rotating" }, { "CF-Connecting-IP": "2001:db8:bb:1:1234:5678:9abc:def0" });
     expect(res.status).toBe(429);
   });
