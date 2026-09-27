@@ -6,6 +6,9 @@ those Macs upload with, and the relay that carries a browser through to a
 panel. It is on the public internet at `syllabusaccounts.maincoursemedia.com`.
 Reports are genuinely welcome.
 
+How the service is meant to hold up, route by route, is in
+[docs/threat-model.md](docs/threat-model.md).
+
 ## Reporting a vulnerability
 
 Use GitHub's private reporting:

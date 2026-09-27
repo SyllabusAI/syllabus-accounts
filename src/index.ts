@@ -25,10 +25,18 @@ import { billing, billingView } from "./billing";
 import { settings } from "./settings";
 import { stripeHooks } from "./stripe";
 import { drive } from "./drive";
+import { sweepDriveGrants } from "./drive-keys";
+import type { Bindings } from "./env";
+import { bodyCap, securityHeaders } from "./headers";
 import { sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
 
 const app = new Hono<AppEnv>();
+
+// First of all, so that every response, the webhook's included, carries the
+// security headers and no handler reads an oversized body (headers.ts).
+app.use("*", securityHeaders);
+app.use("*", bodyCap);
 
 // Mounted BEFORE the auth middleware, and deliberately.
 //
@@ -137,6 +145,30 @@ app.onError((err, c) => {
   return c.text("Something went wrong", 500);
 });
 
-export default app;
+/**
+ * The hourly cron (wrangler.jsonc triggers): housekeeping nobody waits on.
+ *
+ * Seals any Drive grant not under the current DRIVE_KEY again under it, which
+ * is what lets DRIVE_KEY_PREVIOUS be deleted after a rotation
+ * (docs/drive-key-rotation.md), and clears rate-limit windows that closed
+ * long ago. Both are bounded and idempotent, so a missed or doubled run
+ * changes nothing.
+ */
+export async function scheduled(_event: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
+  ctx.waitUntil(
+    (async () => {
+      const sweep = await sweepDriveGrants(env);
+      if (sweep.resealed || sweep.unreadable || sweep.remaining) {
+        console.log(
+          `drive keys: resealed ${sweep.resealed}, unreadable ${sweep.unreadable}, ` +
+            `${sweep.remaining} not yet under the current DRIVE_KEY`,
+        );
+      }
+      await db.sweepRateLimits(env.DB, Math.floor(Date.now() / 1000) - 3600);
+    })(),
+  );
+}
+
+export default { fetch: app.fetch, scheduled } satisfies ExportedHandler<Bindings>;
 // The Durable Object class has to be exported from the entry module.
 export { PanelRelay } from "./panel-relay";
