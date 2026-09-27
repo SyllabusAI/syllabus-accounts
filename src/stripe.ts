@@ -20,13 +20,17 @@
  *    even after one. Handling an event twice is how an account silently gets
  *    two months of allowance, so every delivery claims its event id first.
  *
- * Nothing here calls Stripe back. Every field stored comes out of the event
- * body, which keeps a delivery to one D1 round trip and means a Stripe
- * outage cannot stop a webhook that has already arrived.
+ * Nothing here calls Stripe back, with one exception. Every field stored
+ * comes out of the event body, which keeps a delivery to one D1 round trip
+ * and means a Stripe outage cannot stop a webhook that has already arrived.
+ * The exception is money arriving for an account that was deleted: a live
+ * subscription is canceled and a paid top-up refunded, because nothing else
+ * would ever stop them.
  */
 
 import { Hono, type Context } from "hono";
 import Stripe from "stripe";
+import { isLive } from "./billing";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
@@ -161,6 +165,16 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       // not start existing. Swallowed so Stripe stops, and logged so it is
       // findable.
       console.log(`stripe: checkout session named account ${accountId}, which does not exist`);
+      // A Checkout page left open in another tab can still be paid after its
+      // account is deleted. A subscription is stopped by its own events
+      // below; a top-up has no events of its own, so the money goes back here.
+      if (session.mode === "payment" && session.payment_status === "paid") {
+        const intent = idOf(session.payment_intent as string | { id?: string } | null);
+        if (intent) {
+          await stripeClient(c.env).refunds.create({ payment_intent: intent });
+          console.log(`stripe: refunded top-up ${session.id}, paid after its account was deleted`);
+        }
+      }
       return "";
     }
     await db.linkStripeCustomer(c.env.DB, customerId, accountId);
@@ -192,10 +206,26 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
   const sub = event.data.object as Stripe.Subscription;
   const accountId = await accountFor(c, sub);
   if (!accountId) {
-    // Checkout stamped an account that is no longer here: it was deleted, and
-    // deleting it is what canceled this subscription. Nothing is left to
-    // mirror it onto, and it will not start existing, so Stripe is told to
-    // stop rather than retrying for three days.
+    // Checkout stamped an account that is no longer here: it was deleted.
+    // Nothing is left to mirror it onto, and it will not start existing, so
+    // Stripe is told to stop rather than retrying for three days.
+    //
+    // Usually deleting it is what canceled this subscription and the event
+    // says so. But a subscription can also START after the deletion (a
+    // Checkout tab left open, or one whose webhook had not landed when the
+    // deletion asked Stripe, so the customer was not yet known here). That
+    // one would charge a card every month for an account that does not
+    // exist, with nothing left to cancel it from, so it is canceled now. A
+    // failure throws, which releases the claim and has Stripe retry.
+    if (isLive(sub.status)) {
+      try {
+        await stripeClient(c.env).subscriptions.cancel(sub.id);
+        console.log(`stripe: canceled ${sub.id}, which started after its account was deleted`);
+      } catch (err) {
+        if (!(err instanceof Stripe.errors.StripeError && err.code === "resource_missing")) throw err;
+      }
+      return "";
+    }
     console.log(`stripe: ${event.type} for ${sub.id} names a deleted account; nothing to update`);
     return "";
   }

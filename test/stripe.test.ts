@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
 import { TRIAL_ALLOWANCE } from "../src/proxy";
 import { TIERS } from "../src/tiers";
@@ -219,6 +219,77 @@ describe("an account that was deleted", () => {
     const res = await deliver(event);
     expect(res.status).toBe(200);
     expect(await db.subscriptionById(env.DB, "sub_deleted_account")).toBeNull();
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Stripe's API, scripted; `fail` answers every call with a Stripe error. */
+  function stripeApi(fail = false) {
+    const calls: { method: string; path: string; body: URLSearchParams }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const url = new URL(String(input instanceof Request ? input.url : input));
+        if (url.hostname !== "api.stripe.com") throw new Error("unexpected fetch to " + url);
+        calls.push({
+          method: (init.method ?? "GET").toUpperCase(),
+          path: url.pathname,
+          body: new URLSearchParams(typeof init.body === "string" ? init.body : ""),
+        });
+        const status = fail ? 500 : 200;
+        const payload = fail ? { error: { type: "api_error", message: "Stripe is down" } } : { id: "x", object: "thing" };
+        return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    return calls;
+  }
+
+  it("cancels a subscription that STARTED after its account was deleted", async () => {
+    // A Checkout tab left open and paid after the deletion. Nothing else
+    // would ever stop this charging the card every month.
+    const calls = stripeApi();
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_after_deletion",
+      customer: "cus_after_deletion",
+      status: "active",
+      metadata: { account_id: "an-account-deleted-before-checkout-finished" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /v1/subscriptions/sub_after_deletion"]);
+    expect(await db.subscriptionById(env.DB, "sub_after_deletion")).toBeNull();
+  });
+
+  it("has Stripe retry when that cancellation fails, rather than accepting a live orphan", async () => {
+    stripeApi(true);
+    const event = subscriptionEvent("customer.subscription.created", {
+      id: "sub_orphan_retry",
+      customer: "cus_orphan_retry",
+      status: "trialing",
+      metadata: { account_id: "an-account-deleted-and-stripe-down" },
+    });
+    expect((await deliver(event)).status).toBe(500);
+    vi.unstubAllGlobals();
+    // The claim was released, so the redelivery does the work.
+    const calls = stripeApi();
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => c.path)).toEqual(["/v1/subscriptions/sub_orphan_retry"]);
+  });
+
+  it("refunds a top-up paid after its account was deleted", async () => {
+    const calls = stripeApi();
+    const event = checkoutEvent({
+      id: "cs_topup_after_deletion",
+      mode: "payment",
+      payment_status: "paid",
+      payment_intent: "pi_after_deletion",
+      subscription: null,
+      customer: "cus_topup_after",
+      client_reference_id: "an-account-deleted-before-topping-up",
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe("/v1/refunds");
+    expect(calls[0].body.get("payment_intent")).toBe("pi_after_deletion");
   });
 });
 
