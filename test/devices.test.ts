@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { claimDevice, get, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { claimDevice, freezeClockJustBeforeAWindowEnds, get, ORIGIN, postForm, postJson, rateLimitWindows, signedInAs } from "./helpers";
 
 describe("claiming a panel", () => {
   it("hands out a code a person can type", async () => {
@@ -205,6 +205,15 @@ describe("signing out every Mac", () => {
  */
 describe("the open device routes have a limit", () => {
   const from = (ip: string) => ({ "CF-Connecting-IP": ip });
+  // These count against fixed windows, and a slow run that crossed a window
+  // boundary once reset the poll count and never saw slow_down (CI, 4.8 s).
+  let frozenAt = 0;
+  beforeEach(() => {
+    frozenAt = freezeClockJustBeforeAWindowEnds();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("stops one source from allocating claims without end", async () => {
     const codes = new Set<string>();
@@ -225,7 +234,7 @@ describe("the open device routes have a limit", () => {
     // A different Mac somewhere else is unaffected by that one's behavior.
     const elsewhere = await postJson("/device/start", { name: "Innocent" }, from("198.51.100.8"));
     expect(elsewhere.status).toBe(200);
-  });
+  }, 30_000);
 
   it("limits polling too, and a panel's own pace is nowhere near it", async () => {
     const started = (await (await postJson("/device/start", {}, from("198.51.100.9"))).json()) as {
@@ -245,7 +254,9 @@ describe("the open device routes have a limit", () => {
       sawSlowDown = ((await res.json()) as { error: string }).error === "slow_down";
     }
     expect(sawSlowDown).toBe(true);
-  });
+    expect(await rateLimitWindows("device-poll:198.51.100.9")).toEqual([Math.floor(frozenAt / 60_000) * 60]);
+    // 72 requests, which a slow runner has taken 4.8 s over; the default is 5.
+  }, 30_000);
 
   it("still lets a person claim a Mac normally", async () => {
     const { token } = await claimDevice("normal@example.com", "An Ordinary Mac");

@@ -20,8 +20,27 @@
  *
  * With no socket, or a socket that does not answer, the browser gets a page
  * saying the Mac is not connected rather than a timeout. The object sleeps
- * (hibernates) between messages; pings from the panel are answered without
- * waking it.
+ * (hibernates) between messages.
+ *
+ * Keepalive, two kinds, neither of which wakes the object:
+ *
+ *   protocol pings   WebSocket ping control frames, which is what the panel
+ *                    sends today (websocket-client's run_forever(ping_interval=30)).
+ *                    The Cloudflare runtime answers them with a pong itself;
+ *                    they never reach webSocketMessage and leave no trace
+ *                    here. They keep the path open and let the PANEL notice a
+ *                    dead link (its ping_timeout). They tell this object
+ *                    nothing.
+ *   text "ping"      an ordinary text message whose whole body is `ping`,
+ *                    answered with the text `pong` by the auto-response set in
+ *                    the constructor. The runtime records when it last did
+ *                    that (getWebSocketAutoResponseTimestamp), which is the
+ *                    only liveness signal this object can read without being
+ *                    woken for every heartbeat. A panel that has sent one is
+ *                    held to it: silent for PANEL_SILENCE_MS and its socket is
+ *                    treated as dead (see livePanel). A panel that never sends
+ *                    one, which is every panel before LectureAI adds it, is
+ *                    judged only by the request timeout, as before.
  */
 
 import { DurableObject } from "cloudflare:workers";
@@ -35,6 +54,17 @@ export const REQUEST_TIMEOUT_MS = 25_000;
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 /** The most a browser may send to the panel. The panel's forms are small JSON. */
 export const MAX_BODY_BYTES = 64 * 1024;
+/**
+ * How long a panel that sends text heartbeats may go without one before its
+ * socket is presumed dead: three missed beats at the panel's 30 second pace.
+ * A lid closed without a goodbye then reads as not connected on the account
+ * page and gets an immediate 503, instead of "Connected now" and a 25 second
+ * wait for a 504.
+ */
+export const PANEL_SILENCE_MS = 90_000;
+/** The text heartbeat and its answer, handled by the runtime without waking the object. */
+export const HEARTBEAT = "ping";
+export const HEARTBEAT_REPLY = "pong";
 /** What the panel should split responses at. Told to the panel in the welcome frame. */
 export const CHUNK_BYTES = 256 * 1024;
 
@@ -82,8 +112,9 @@ export class PanelRelay extends DurableObject<Bindings> {
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
-    // The panel pings to keep NATs and sleepy links honest; answer without waking.
-    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    // Only for the text heartbeat. Protocol ping frames, which is what the
+    // panel sends now, are answered by the runtime and never match this.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(HEARTBEAT, HEARTBEAT_REPLY));
   }
 
   private async state(): Promise<RelayState> {
@@ -98,9 +129,29 @@ export class PanelRelay extends DurableObject<Bindings> {
     return this.ctx.getWebSockets("panel")[0] ?? null;
   }
 
+  /**
+   * The panel's socket if it is plausibly alive. One whose panel has sent text
+   * heartbeats and then stopped for PANEL_SILENCE_MS is closed and recorded
+   * as gone here, the way a request timeout would, without waiting for one.
+   */
+  private async livePanel(): Promise<WebSocket | null> {
+    const ws = this.panel();
+    if (!ws) return null;
+    const heard = this.ctx.getWebSocketAutoResponseTimestamp(ws);
+    if (!heard || Date.now() - heard.getTime() <= PANEL_SILENCE_MS) return ws;
+    try {
+      ws.close(1011, "no heartbeat from the panel");
+    } catch {
+      /* already gone */
+    }
+    await this.gone(ws, `presumed dead: no heartbeat since ${heard.toISOString()}`);
+    return null;
+  }
+
   /** For the account page and the panel's own Setup page: is the Mac here right now. */
   async describe(): Promise<RelayState & { connected: boolean }> {
-    return { ...(await this.state()), connected: this.panel() !== null };
+    const connected = (await this.livePanel()) !== null;
+    return { ...(await this.state()), connected };
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -220,7 +271,7 @@ export class PanelRelay extends DurableObject<Bindings> {
 
   private async relay(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const ws = this.panel();
+    const ws = await this.livePanel();
     if (!ws) return this.notConnected(await this.state(), url.pathname);
     const id = randomId(9);
     const headers: Record<string, string> = {};
