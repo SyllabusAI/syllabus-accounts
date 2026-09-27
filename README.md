@@ -36,7 +36,8 @@ their Google Drive grant.
   starts a new, empty account with no free trial: it gets an allowance row of
   zeros (`source = 'trial_used'`) instead of the trial a missing row means,
   and Checkout starts its plan without a Stripe trial. Paid plans work as for
-  anybody else.
+  anybody else. An account that has held a subscription before gets no second
+  Stripe trial either, so canceling and subscribing again is not a way around it.
 
 ## The device flow
 

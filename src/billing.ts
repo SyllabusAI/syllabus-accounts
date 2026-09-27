@@ -92,11 +92,17 @@ billing.post("/billing/checkout", async (c) => {
    */
   const redeeming = String(form.get("redeem") ?? "") === "1";
   /**
-   * Somebody whose free trial was spent on an account they since deleted
-   * (migrations/0013) starts paying on day one. The Stripe trial is the free
-   * trial in another shape, so handing it back here would undo the block.
+   * The Stripe trial is given once. Somebody whose free trial was spent on an
+   * account they since deleted (migrations/0013) starts paying on day one,
+   * and so does anybody who has held a subscription here before: canceling a
+   * trialing subscription and starting another would otherwise be five free
+   * hours on demand, which is exactly what the deletion block is closing.
    */
-  const trialSpent = (await db.allowance(c.env.DB, account!.id))?.source === "trial_used";
+  const [row, earlier] = await Promise.all([
+    db.allowance(c.env.DB, account!.id),
+    db.subscriptionsOf(c.env.DB, account!.id),
+  ]);
+  const trialSpent = row?.source === "trial_used" || earlier.length > 0;
   const withTrial = !redeeming && !trialSpent;
 
   // A customer we already have keeps one person to one Stripe customer, so

@@ -554,4 +554,24 @@ describe("the free trial after a deletion", () => {
     await postForm("/billing/checkout", { tier: "starter" }, { Cookie: cookie });
     expect(calls[0].get("subscription_data[trial_period_days]")).toBe("90");
   });
+
+  it("gives no second Stripe trial to somebody who has subscribed before", async () => {
+    // Cancel a trialing subscription, start another: without this, five free
+    // hours on demand without ever deleting anything.
+    const { account, cookie } = await signedInAs("resubscriber@example.com");
+    await db.putSubscription(env.DB, {
+      stripe_subscription_id: `sub_${account.id}`,
+      account_id: account.id,
+      stripe_customer_id: `cus_${account.id}`,
+      price_id: "price_test_standard",
+      tier: "standard",
+      status: "canceled",
+      current_period_end: "",
+      cancel_at_period_end: 0,
+    });
+    await db.putAllowance(env.DB, account.id, grant(0, 0, "lapsed"));
+    const calls = stripeCheckout();
+    expect((await postForm("/billing/checkout", { tier: "standard" }, { Cookie: cookie })).status).toBe(303);
+    expect(calls[0].get("subscription_data[trial_period_days]")).toBeNull();
+  });
 });
