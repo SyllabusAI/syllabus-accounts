@@ -17,13 +17,14 @@
 
 import { Hono, type Context } from "hono";
 import { setSignedCookie } from "hono/cookie";
-import { decrypt, encrypt } from "./crypto";
 import * as db from "./db";
-import type { AppEnv } from "./env";
-import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, redirectUri, type Flow } from "./google";
+import { openGrant, sealGrant } from "./drive-keys";
+import type { AppEnv, Bindings } from "./env";
+import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, pkcePair, redirectUri, type Flow } from "./google";
 import { page } from "./pages";
-import { browserOnly, sameOrigin } from "./session";
+import { browserOnly, sameOrigin, sessionSecret } from "./session";
 import { randomId } from "./util";
+import { log } from "./log";
 
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
@@ -37,8 +38,9 @@ drive.get("/drive/connect", async (c) => {
   if (refusal) return refusal;
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent("/drive/connect"));
-  const flow: Flow = { state: randomId(18), nonce: randomId(18), next: "/", t: Date.now(), kind: "drive" };
-  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), c.env.SESSION_SECRET, {
+  const pkce = await pkcePair();
+  const flow: Flow = { state: randomId(18), nonce: randomId(18), next: "/", t: Date.now(), kind: "drive", verifier: pkce.verifier };
+  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), sessionSecret(c), {
     path: "/",
     httpOnly: true,
     secure: c.env.PUBLIC_URL.startsWith("https://"),
@@ -52,6 +54,8 @@ drive.get("/drive/connect", async (c) => {
     scope: `openid email ${DRIVE_SCOPE}`,
     state: flow.state,
     nonce: flow.nonce,
+    code_challenge: pkce.challenge,
+    code_challenge_method: "S256",
     // A refresh token is only issued with offline access, and only reliably
     // when consent is asked for again; the hint keeps the picker on the
     // account they signed in with.
@@ -76,6 +80,7 @@ export async function finishConnect(c: Context<AppEnv>, flow: Flow, code: string
         client_secret: c.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: redirectUri(c.env.PUBLIC_URL),
         grant_type: "authorization_code",
+        code_verifier: flow.verifier ?? "",
       }),
     });
     if (!res.ok) throw new Error(`token endpoint answered ${res.status}`);
@@ -89,10 +94,10 @@ export async function finishConnect(c: Context<AppEnv>, flow: Flow, code: string
     if (!body.refresh_token) {
       return c.html(page("Google Drive", "<p>Google did not return a lasting grant. Try again; if it keeps happening, remove Syllabus under your Google account's third-party access and connect once more.</p><p><a href='/drive/connect'>Try again</a></p>"), 400);
     }
-    await db.putDriveGrant(c.env.DB, account.id, await encrypt(c.env.DRIVE_KEY, body.refresh_token), body.scope ?? DRIVE_SCOPE, (claims.email ?? "").toLowerCase());
-    console.log(`drive connected for ${account.email} (${claims.email})`);
+    await db.putDriveGrant(c.env.DB, account.id, await sealGrant(c.env, body.refresh_token), body.scope ?? DRIVE_SCOPE, (claims.email ?? "").toLowerCase());
+    log(`drive connected for account ${account.id}`);
   } catch (err) {
-    console.log(`drive connect failed: ${(err as Error).message}`);
+    log(`drive connect failed: ${(err as Error).message}`);
     return c.html(page("Google Drive", "<p>The Drive connection could not be completed with Google.</p><p><a href='/drive/connect'>Try again</a></p>"), 502);
   }
   return c.redirect("/");
@@ -124,9 +129,9 @@ drive.post("/drive/token", async (c) => {
   if (grant.revoked_at) return c.json({ error: "grant_revoked", reason: grant.revoked_reason }, 409);
   let refreshToken: string;
   try {
-    refreshToken = await decrypt(c.env.DRIVE_KEY, grant.refresh_token_enc);
+    refreshToken = await openGrant(c.env, grant);
   } catch {
-    console.log(`drive grant for ${account.email} cannot be decrypted; DRIVE_KEY changed?`);
+    log(`drive grant for account ${account.id} cannot be decrypted under DRIVE_KEY or DRIVE_KEY_PREVIOUS`);
     return c.json({ error: "grant_unreadable" }, 500);
   }
   const res = await fetch(TOKEN_URL, {
@@ -142,11 +147,11 @@ drive.post("/drive/token", async (c) => {
   const body = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; scope?: string; error?: string };
   if (res.status === 400 && body.error === "invalid_grant") {
     await db.markDriveGrantRevoked(c.env.DB, account.id, "Google no longer honors the grant");
-    console.log(`drive grant for ${account.email} was revoked at Google`);
+    log(`drive grant for account ${account.id} was revoked at Google`);
     return c.json({ error: "grant_revoked", reason: "Google no longer honors the grant" }, 409);
   }
   if (!res.ok || !body.access_token) {
-    console.log(`drive token refresh for ${account.email} failed: ${res.status} ${body.error ?? ""}`);
+    log(`drive token refresh for account ${account.id} failed: ${res.status} ${body.error ?? ""}`);
     return c.json({ error: "google_unavailable", status: res.status }, 502);
   }
   return c.json({
@@ -163,15 +168,40 @@ drive.post("/drive/disconnect", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
-  const grant = await db.driveGrant(c.env.DB, account.id);
-  if (grant && !grant.revoked_at) {
-    try {
-      const token = await decrypt(c.env.DRIVE_KEY, grant.refresh_token_enc);
-      await fetch(REVOKE_URL + "?" + new URLSearchParams({ token }), { method: "POST" });
-    } catch (err) {
-      console.log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
-    }
-  }
+  await revokeAtGoogle(c.env, account.id);
   await db.deleteDriveGrant(c.env.DB, account.id);
   return c.redirect("/");
 });
+
+/**
+ * Ask Google to end the account's Drive grant, if it holds a live one.
+ *
+ * Best effort, and deliberately: a Google that is down or a grant it has
+ * already dropped must not keep somebody from disconnecting or from deleting
+ * their account. The stored copy is deleted by the caller either way, so the
+ * refresh token is unusable by this service from then on, and the person can
+ * still remove Syllabus under their Google account's third-party access.
+ */
+export async function revokeAtGoogle(env: Pick<Bindings, "DB" | "DRIVE_KEY" | "DRIVE_KEY_PREVIOUS">, accountId: string): Promise<void> {
+  await revokeGrantAtGoogle(env, await db.driveGrant(env.DB, accountId));
+}
+
+/** revokeAtGoogle for a grant already read, so a caller can delete the row first. */
+export async function revokeGrantAtGoogle(
+  env: Pick<Bindings, "DB" | "DRIVE_KEY" | "DRIVE_KEY_PREVIOUS">,
+  grant: db.DriveGrant | null,
+): Promise<void> {
+  if (!grant || grant.revoked_at) return;
+  try {
+    const token = await openGrant(env, grant);
+    // In the body rather than the query string, where a URL would carry the
+    // refresh token into any log that records one.
+    await fetch(REVOKE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+    });
+  } catch (err) {
+    log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
+  }
+}

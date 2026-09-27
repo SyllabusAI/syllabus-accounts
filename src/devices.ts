@@ -15,13 +15,43 @@
 import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { clientAddress as source, LIMITS, limitedPage, overLimit } from "./limits";
 import { approvedPage, devicePage } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
+import { log } from "./log";
 
 export const CODE_SECONDS = 900;
 export const POLL_INTERVAL = 5;
 const PROFILES = new Set(["syllabus", "sous"]);
+
+/**
+ * How long a device token lives without being used.
+ *
+ * The window slides: every use moves it forward, so a Mac that runs Syllabus
+ * at least once a quarter is never signed out, while a token on a Mac that
+ * was lost, sold or wiped dies on its own instead of waiting for its owner to
+ * remember it. Sliding is recorded at most once per TOKEN_TOUCH_SECONDS, so
+ * a panel polling all day costs one D1 write a day, not one per request; the
+ * cost is that the window can end up to a day earlier than the last request.
+ */
+export const TOKEN_IDLE_DAYS = 90;
+export const TOKEN_TOUCH_SECONDS = 24 * 60 * 60;
+
+/**
+ * What to do with a token that otherwise checks out, given when it was last
+ * stamped as used. A null stamp is a token minted before stamping existed
+ * (or in the minute between the migration and the deploy); it counts as used
+ * just now, so nobody is signed out by the change, and gets stamped.
+ */
+export function tokenStanding(lastUsedAt: string | null, nowMs = Date.now()): "live" | "touch" | "expired" {
+  if (lastUsedAt === null) return "touch";
+  const last = Date.parse(lastUsedAt);
+  if (Number.isNaN(last)) return "touch";
+  const idle = nowMs - last;
+  if (idle > TOKEN_IDLE_DAYS * 86_400_000) return "expired";
+  return idle >= TOKEN_TOUCH_SECONDS * 1000 ? "touch" : "live";
+}
 
 /**
  * What the two open routes allow, and why they need anything at all.
@@ -35,19 +65,12 @@ const PROFILES = new Set(["syllabus", "sous"]);
  * A real panel starts one claim per sign-in and polls it every POLL_INTERVAL
  * seconds until a person types the code, so the limits below are far above
  * anything a Mac does and only bite on a script. They are keyed by source
- * address, which is a weak identifier that costs an attacker something to
- * vary; PENDING_CAP is the backstop that does not depend on the key at all.
+ * address (LIMITS.deviceStart and LIMITS.devicePoll in limits.ts, sized for
+ * a lecture hall on one address), which is a weak identifier that costs an
+ * attacker something to vary; PENDING_CAP is the backstop that does not
+ * depend on the key at all.
  */
-const START_LIMIT = 10;
-const START_WINDOW_SECONDS = 600;
-const POLL_LIMIT = 60;
-const POLL_WINDOW_SECONDS = 60;
 const PENDING_CAP = 500;
-
-/** Who is asking, as well as this can be known at the edge. */
-function source(c: Context<AppEnv>): string {
-  return c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() || "unknown";
-}
 
 function rateLimited(c: Context<AppEnv>, limit: number, windowSeconds: number, retryAfter: number) {
   return c.json({ error: "rate_limited", limit, window_seconds: windowSeconds }, 429, {
@@ -62,8 +85,8 @@ function tidyName(raw: unknown): string {
 }
 
 devices.post("/device/start", async (c) => {
-  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, START_LIMIT, START_WINDOW_SECONDS);
-  if (!gate.allowed) return rateLimited(c, START_LIMIT, START_WINDOW_SECONDS, gate.retryAfter);
+  const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, LIMITS.deviceStart.limit, LIMITS.deviceStart.window);
+  if (!gate.allowed) return rateLimited(c, LIMITS.deviceStart.limit, LIMITS.deviceStart.window, gate.retryAfter);
 
   const body = (await c.req.json().catch(() => ({}))) as { profile?: string; name?: string };
   const profile = PROFILES.has(String(body.profile)) ? String(body.profile) : "syllabus";
@@ -71,12 +94,12 @@ devices.post("/device/start", async (c) => {
   await db.sweepDeviceCodes(c.env.DB);
   // Expired windows are of no further use and this is the quietest route
   // that runs often enough to clear them.
-  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * START_WINDOW_SECONDS);
+  await db.sweepRateLimits(c.env.DB, Math.floor(Date.now() / 1000) - 3 * LIMITS.deviceStart.window);
 
   // The limit above is per source; this one is not, so a spread-out flood
   // still cannot fill the table or exhaust the codes people have to read.
   if ((await db.pendingDeviceCodes(c.env.DB)) >= PENDING_CAP) {
-    console.log(`device/start refused: ${PENDING_CAP} claims already pending`);
+    log(`device/start refused: ${PENDING_CAP} claims already pending`);
     return c.json({ error: "too_many_pending" }, 503, { "Retry-After": String(CODE_SECONDS) });
   }
 
@@ -103,6 +126,18 @@ devices.get("/device", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent(c.req.path + (c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "")));
   const code = normalizeUserCode(c.req.query("code") ?? "");
+  // A signed-in guesser learns from this page whether a code is live, so it
+  // is limited like the approval it leads to: per account, and per address
+  // so that a pile of accounts on one address gains nothing.
+  if (code) {
+    for (const [bucket, rule] of [
+      [`device-lookup:${account.id}`, LIMITS.deviceLookup],
+      [`device-lookup-ip:${source(c)}`, LIMITS.deviceLookupAddress],
+    ] as const) {
+      const wait = await overLimit(c, bucket, rule);
+      if (wait !== null) return limitedPage(c, wait);
+    }
+  }
   let deviceName = "";
   if (code) {
     const pending = await db.deviceCodeByUserCode(c.env.DB, code);
@@ -117,6 +152,17 @@ devices.post("/device/approve", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=/device");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
+  // A code guessed right would enroll somebody else's Mac into this account,
+  // and its notes into this account's Drive. 32^8 codes against at most
+  // PENDING_CAP live ones is already long odds; these make it hopeless, per
+  // account and per address, so a pile of accounts on one address gains nothing.
+  for (const [bucket, rule] of [
+    [`device-approve:${account.id}`, LIMITS.deviceApprove],
+    [`device-approve-ip:${source(c)}`, LIMITS.deviceApproveAddress],
+  ] as const) {
+    const wait = await overLimit(c, bucket, rule);
+    if (wait !== null) return limitedPage(c, wait);
+  }
   const form = await c.req.parseBody();
   const typed = String(form.user_code ?? "");
   const code = normalizeUserCode(typed);
@@ -136,7 +182,7 @@ devices.post("/device/approve", async (c) => {
     await db.revokeDevice(c.env.DB, account.id, device.id);
     return c.html(devicePage(account, code, "", "That code was already used."), 400);
   }
-  console.log(`device ${device.id} (${name}) joined ${account.email}`);
+  log(`device ${device.id} joined account ${account.id}`);
   return c.html(approvedPage(account, name));
 });
 
@@ -146,7 +192,7 @@ devices.post("/device/poll", async (c) => {
   // it by waiting longer (run_claim in intake/account.py). Anything else
   // reads to that loop as a refusal and abandons a claim that is still good,
   // which would turn a shared address into a sign-in that cannot finish.
-  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, POLL_LIMIT, POLL_WINDOW_SECONDS);
+  const gate = await db.hitRateLimit(c.env.DB, `device-poll:${source(c)}`, LIMITS.devicePoll.limit, LIMITS.devicePoll.window);
   if (!gate.allowed) {
     return c.json({ error: "slow_down", interval: POLL_INTERVAL * 2 }, 400, {
       "Retry-After": String(gate.retryAfter),
@@ -200,6 +246,6 @@ devices.post("/devices/revoke-all", async (c) => {
   if (!account) return c.redirect("/login");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
   const removed = await db.revokeEverything(c.env.DB, account.id);
-  console.log(`${account.email} signed out every Mac (${removed})`);
+  log(`account ${account.id} signed out every Mac (${removed})`);
   return c.redirect("/");
 });

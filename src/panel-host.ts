@@ -42,6 +42,7 @@ import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import * as db from "./db";
 import type { Account, AppEnv, Bindings } from "./env";
 import { page } from "./pages";
+import { log } from "./log";
 import { forward, ownedDevice, panelRequest, relayAllowed } from "./relay";
 import { escapeHtml as h, fromBase64Url, PANEL_PREFIX, randomId, toBase64Url } from "./util";
 
@@ -297,7 +298,7 @@ panelHost.get(`/p/:device/${AUTH_SEGMENT}`, async (c) => {
   const origin = panelOrigin(c.env) as string;
   const deviceId = c.req.param("device");
   const refused = (why: string) => {
-    console.log(`refused a panel ticket for device ${deviceId}: ${why}`);
+    log(`refused a panel ticket for device ${deviceId}: ${why}`);
     const res = c.html(
       page(
         "Sign in",
@@ -349,6 +350,6 @@ panelHost.all("/p/:device/*", async (c) => {
 
 panelHost.notFound((c) => c.text("Not found", 404));
 panelHost.onError((err, c) => {
-  console.log(`panel host error: ${err.message}`);
+  log(`panel host error: ${err.message}`);
   return c.text("Something went wrong", 500);
 });

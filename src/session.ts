@@ -12,6 +12,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { accountById } from "./db";
 import type { AppEnv } from "./env";
+import { log } from "./log";
 import { countCookie, panelOrigin } from "./panel-host";
 
 export const SESSION_COOKIE = "syllabus_accounts_session";
@@ -19,9 +20,24 @@ export const SESSION_DAYS = 30;
 
 type SessionData = { a: string; t: number };
 
+/**
+ * SESSION_SECRET, or a refusal to go on without one.
+ *
+ * An unset or empty secret would sign every cookie with a key anybody can
+ * reproduce, so a missing secret is an error rather than a default. The
+ * sign-in cookie between /login and the callback is signed with the same
+ * secret; the two cannot be swapped for each other, because neither one's
+ * contents pass the other's checks.
+ */
+export function sessionSecret(c: Context<AppEnv>): string {
+  const secret = c.env.SESSION_SECRET;
+  if (!secret) throw new Error("SESSION_SECRET is not set; refusing to sign or read a session");
+  return secret;
+}
+
 export async function setSession(c: Context<AppEnv>, accountId: string): Promise<void> {
   const data: SessionData = { a: accountId, t: Date.now() };
-  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), c.env.SESSION_SECRET, {
+  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), sessionSecret(c), {
     path: "/",
     httpOnly: true,
     secure: c.env.PUBLIC_URL.startsWith("https://"),
@@ -34,24 +50,45 @@ export function clearSession(c: Context<AppEnv>): void {
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
 }
 
-/** The account id a valid, unexpired session cookie names, or "". */
-export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
+/** A valid, unexpired session cookie's contents, or null. */
+async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
+  if (!c.env.SESSION_SECRET) {
+    log("SESSION_SECRET is not set; every session reads as signed out");
+    return null;
+  }
   // setSession() writes one host-only cookie, and a browser holding it sends
   // it once. A second one of the same name was set by some other host of
   // this site with a Domain attribute (a panel host that is a sibling
   // subdomain, say, running the panel's own scripts), and which of the two a
   // parser picks is not ours to decide. Neither is trusted.
-  if (countCookie(c.req.header("Cookie") ?? "", SESSION_COOKIE) > 1) return "";
+  if (countCookie(c.req.header("Cookie") ?? "", SESSION_COOKIE) > 1) return null;
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!raw) return "";
+  if (!raw) return null;
   try {
     const data = JSON.parse(raw) as SessionData;
-    if (typeof data.a !== "string" || typeof data.t !== "number") return "";
-    if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return "";
-    return data.a;
+    if (typeof data.a !== "string" || typeof data.t !== "number") return null;
+    if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return null;
+    return data;
   } catch {
-    return "";
+    return null;
   }
+}
+
+/** The account id a valid, unexpired session cookie names, or "". */
+export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
+  return (await readSession(c))?.a ?? "";
+}
+
+/**
+ * When the browser last signed in with Google, in ms since the epoch, or 0.
+ *
+ * The cookie is only ever written by the sign-in callback, and every sign-in
+ * goes through Google's account chooser (prompt=select_account in
+ * google.ts), which a person has to click. So a recent value means a person
+ * was at Google a moment ago, which no script on this origin can arrange.
+ */
+export async function sessionSignedInAt(c: Context<AppEnv>): Promise<number> {
+  return (await readSession(c))?.t ?? 0;
 }
 
 /** Sets c.var.account from the session cookie; never refuses on its own. */

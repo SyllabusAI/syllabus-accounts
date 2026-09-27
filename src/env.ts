@@ -37,6 +37,12 @@ export type Bindings = {
   /** Secret: encrypts stored Drive refresh tokens. `wrangler secret put DRIVE_KEY`. */
   DRIVE_KEY: string;
   /**
+   * Secret, OPTIONAL: the DRIVE_KEY being retired, set only during a rotation.
+   * Grants still sealed under it open with it and are sealed again under
+   * DRIVE_KEY. docs/drive-key-rotation.md says when it can be deleted.
+   */
+  DRIVE_KEY_PREVIOUS?: string;
+  /**
    * Secret: the transcription key the proxy spends when Groq is unavailable
    * or unset. `wrangler secret put OPENAI_API_KEY`.
    */

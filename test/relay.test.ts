@@ -1,5 +1,6 @@
 import { SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT, HEARTBEAT_REPLY, PANEL_SILENCE_MS } from "../src/panel-relay";
 import type { ReqFrame, ResFrame, ChunkFrame, WelcomeFrame } from "../src/panel-relay";
 import { panelUrl, relayAllowed } from "../src/relay";
 import { fromBase64, toBase64 } from "../src/util";
@@ -17,8 +18,10 @@ async function connectPanel(token: string, answer: (req: ReqFrame) => Array<ResF
   const ws = res.webSocket!;
   ws.accept();
   const seen: ReqFrame[] = [];
+  let pongs = 0;
   const welcome = new Promise<WelcomeFrame>((resolve) => {
     ws.addEventListener("message", (event) => {
+      if (event.data === HEARTBEAT_REPLY) return void (pongs += 1);
       const frame = JSON.parse(String(event.data)) as ReqFrame | WelcomeFrame;
       if (frame.t === "welcome") return resolve(frame);
       if (frame.t !== "req") return;
@@ -32,12 +35,33 @@ async function connectPanel(token: string, answer: (req: ReqFrame) => Array<ResF
   // going. A test that ends while the server side is still open leaves the
   // pool waiting on a child that never exits, which is a hang with every
   // test passing. Always close through this.
-  const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
+  let serverClosed: { code: number; reason: string } | null = null;
+  const closed = new Promise<void>((resolve) =>
+    ws.addEventListener("close", (event) => {
+      serverClosed ??= { code: event.code, reason: event.reason };
+      resolve();
+    }),
+  );
+  let closing = false;
   const close = async (code?: number, reason?: string) => {
-    ws.close(code, reason);
+    if (!closing) {
+      closing = true;
+      try {
+        ws.close(code, reason);
+      } catch {
+        /* the service closed it first */
+      }
+    }
     await closed;
   };
-  return { ws, seen, welcome: await welcome, close };
+  /** Send the text heartbeat intake/relay.py should send, and wait for the answer. */
+  const heartbeat = async () => {
+    const before = pongs;
+    ws.send(HEARTBEAT);
+    for (let i = 0; i < 200 && pongs === before; i++) await new Promise((r) => setTimeout(r, 5));
+    return pongs > before;
+  };
+  return { ws, seen, welcome: await welcome, close, heartbeat, closedByService: () => serverClosed };
 }
 
 const echo = (req: ReqFrame): ResFrame[] => [
@@ -232,5 +256,55 @@ describe("a browser at /p/<device>/", () => {
     expect(first.seen).toHaveLength(0);
     // Both, not just the newest: the replaced socket is still workerd's to close.
     await Promise.all([first.close(), second.close()]);
+  });
+});
+
+describe("keeping the panel's socket honest", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("answers a text heartbeat with pong, and it never reaches the panel's frames", async () => {
+    const mine = await claimDevice("me@example.com");
+    const panel = await connectPanel(mine.token, echo);
+    expect(await panel.heartbeat()).toBe(true);
+    expect(await panel.heartbeat()).toBe(true);
+    // Still an ordinary, working connection afterwards.
+    expect((await get(`/p/${mine.deviceId}/api/status`, { Cookie: mine.cookie })).status).toBe(200);
+    await panel.close();
+  });
+
+  it("treats a panel that stopped its heartbeat as gone, without a 25 second wait", async () => {
+    const mine = await claimDevice("me@example.com", "Lid Closed");
+    const panel = await connectPanel(mine.token, echo);
+    expect(await panel.heartbeat()).toBe(true);
+    let html = await (await get("/", { Cookie: mine.cookie })).text();
+    expect(html).toContain("Connected now");
+
+    // Three beats missed. The Durable Object runs in this isolate and reads this Date.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + PANEL_SILENCE_MS + 1_000);
+    html = await (await get("/", { Cookie: mine.cookie })).text();
+    expect(html).toContain("Not connected, last connected");
+    const res = await get(`/p/${mine.deviceId}/api/status`, { Cookie: mine.cookie });
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { relay: string }).relay).toBe("not-connected");
+    expect(panel.seen).toHaveLength(0);
+
+    vi.useRealTimers();
+    await panel.close();
+    expect(panel.closedByService()?.code).toBe(1011);
+  });
+
+  it("holds a panel that never sent one only to the request timeout, as before", async () => {
+    // Every panel before LectureAI sends the text heartbeat: protocol pings
+    // are answered by the runtime and leave no timestamp to judge by.
+    const mine = await claimDevice("me@example.com");
+    const panel = await connectPanel(mine.token, echo);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 10 * PANEL_SILENCE_MS);
+    expect((await get(`/p/${mine.deviceId}/api/status`, { Cookie: mine.cookie })).status).toBe(200);
+    vi.useRealTimers();
+    await panel.close();
   });
 });

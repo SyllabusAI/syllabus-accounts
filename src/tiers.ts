@@ -12,6 +12,7 @@
 
 import type { Bindings } from "./env";
 import type { Subscription } from "./db";
+import { log } from "./log";
 
 export type TierName = "starter" | "standard" | "pro";
 
@@ -129,6 +130,20 @@ export const LAPSED_ALLOWANCE: AllowanceGrant = {
 };
 
 /**
+ * A new account for a Google identity whose earlier account was deleted after
+ * its trial. Zeros, like a lapsed subscription, and written at sign-in so the
+ * "no row means the trial" default in src/proxy.ts never applies to it. See
+ * migrations/0013_trial_used.sql. The webhook overwrites it like any other
+ * row once a paid plan starts.
+ */
+export const TRIAL_USED_ALLOWANCE: AllowanceGrant = {
+  audio_seconds: 0,
+  summary_tokens: 0,
+  assistant_sessions: 0,
+  source: "trial_used",
+};
+
+/**
  * The statuses that entitle.
  *
  * `past_due` is deliberately in the list. Stripe keeps a subscription in it
@@ -180,7 +195,7 @@ export function tierForPrice(env: Pick<Bindings, "STRIPE_PRICE_STARTER" | "STRIP
 export function allowanceForTier(tier: string): AllowanceGrant {
   const known = TIERS[tier as TierName];
   if (known) return { ...grantOf(known) };
-  console.log(`tiers: no allowance is defined for tier "${tier}"; granting starter`);
+  log(`tiers: no allowance is defined for tier "${tier}"; granting starter`);
   return { ...grantOf(TIERS.starter), source: tier || "unknown" };
 }
 

@@ -32,6 +32,7 @@ import { handOff, panelOrigin } from "./panel-host";
 import { MAX_BODY_BYTES, REQUEST_HEADERS, type RelayState } from "./panel-relay";
 import { sameOrigin } from "./session";
 import { PANEL_PREFIX, panelUrl } from "./util";
+import { log } from "./log";
 
 export { PANEL_PREFIX, panelUrl } from "./util";
 
@@ -50,6 +51,16 @@ export async function relayState(env: Bindings, deviceId: string): Promise<Relay
   const stub = env.PANEL.get(env.PANEL.idFromName(deviceId));
   const res = await stub.fetch("https://panel-relay/", { headers: { "X-Relay-Op": "state" } });
   return (await res.json()) as RelayState & { connected: boolean };
+}
+
+/**
+ * Drop a device's panel socket and everything its relay object remembers.
+ * For deleting an account; see forget() in panel-relay.ts.
+ */
+export async function forgetRelay(env: Bindings, deviceId: string): Promise<void> {
+  const stub = env.PANEL.get(env.PANEL.idFromName(deviceId));
+  const res = await stub.fetch("https://panel-relay/", { method: "POST", headers: { "X-Relay-Op": "forget" } });
+  if (!res.ok) throw new Error(`relay object answered ${res.status}`);
 }
 
 export const relay = new Hono<AppEnv>();
@@ -92,7 +103,7 @@ export async function ownedDevice(c: Context<AppEnv>, account: Account, deviceId
     );
   }
   if (device.account_id !== account.id) {
-    console.log(`refused ${account.email} at the panel of device ${device.id}: belongs to another account`);
+    log(`refused account ${account.id} at the panel of device ${device.id}: belongs to another account`);
     if (isApi) return c.json({ error: "not_yours" }, 403);
     return c.html(notYoursPage(account.email), 403);
   }
@@ -138,7 +149,7 @@ relay.all("/p/:device/*", async (c) => {
   // here. A misconfigured panel host relays nothing anywhere until fixed.
   const moved = panelOrigin(c.env);
   if (moved === null) {
-    console.log("PANEL_ORIGIN is set but unusable; refusing to relay (see panelOrigin in src/panel-host.ts)");
+    log("PANEL_ORIGIN is set but unusable; refusing to relay (see panelOrigin in src/panel-host.ts)");
     return c.json({ error: "panel_host_misconfigured" }, 503);
   }
   if (moved) {
