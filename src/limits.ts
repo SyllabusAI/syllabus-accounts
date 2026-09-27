@@ -43,6 +43,12 @@ export const LIMITS = {
   /** GET /device?code=, per account. Looking a code up is how a guesser would learn one is live. */
   deviceLookup: { limit: 60, window: 600 },
   /**
+   * GET /device?code=, per source: the same guard for a pile of accounts on
+   * one address, as deviceApproveAddress is for approving. Sized for a class
+   * opening the link their Macs showed them, a few loads each.
+   */
+  deviceLookupAddress: { limit: 600, window: 600 },
+  /**
    * POST /device/approve, per account. A guessed code would enroll somebody
    * else's Mac into the guesser's account, so this is the limit that makes
    * guessing hopeless rather than merely unlikely.
@@ -64,9 +70,52 @@ export const LIMITS = {
   billing: { limit: 20, window: 600 },
 } as const satisfies Record<string, Limit>;
 
-/** Who is asking, as well as the edge can say. "unknown" outside Cloudflare. */
+/**
+ * Who is asking, as well as the edge can say. "unknown" outside Cloudflare.
+ *
+ * An IPv6 address is cut to its /64. One home or one phone is handed a whole
+ * /64 (2^64 addresses) and can pick a fresh one per request, so keyed on the
+ * full address every per-address limit here was a limit only for IPv4. The
+ * /64 is the unit a network actually hands out, which makes it the IPv6
+ * equivalent of one NAT address, and the limits are already sized for that.
+ */
 export function clientAddress(c: Context<AppEnv>): string {
-  return c.req.header("CF-Connecting-IP") || "unknown";
+  const raw = (c.req.header("CF-Connecting-IP") ?? "").trim();
+  if (!raw) return "unknown";
+  return raw.includes(":") ? ipv6Bucket(raw) : raw;
+}
+
+/**
+ * The /64 an IPv6 address sits in, as "a:b:c:d::/64" with each group in its
+ * shortest lowercase form, so every spelling of one network is one key. An
+ * IPv4-mapped address (::ffff:192.0.2.1) is its IPv4 address. Anything that
+ * does not parse is returned as it came, which is no worse than before.
+ */
+export function ipv6Bucket(address: string): string {
+  const text = address.split("%")[0].toLowerCase();
+  const halves = text.split("::");
+  if (halves.length > 2) return address;
+  const groups = (part: string) => (part ? part.split(":") : []);
+  let head = groups(halves[0]);
+  let tail = halves.length === 2 ? groups(halves[1]) : [];
+  // A dotted IPv4 tail (::ffff:192.0.2.1) is the last two groups.
+  const last = (tail.length ? tail : head).at(-1) ?? "";
+  let v4 = "";
+  if (last.includes(".")) {
+    if (!/^(\d{1,3})(\.\d{1,3}){3}$/.test(last) || last.split(".").some((n) => Number(n) > 255)) return address;
+    v4 = last;
+    const [a, b, c2, d] = last.split(".").map(Number);
+    const pair = [((a << 8) | b).toString(16), ((c2 << 8) | d).toString(16)];
+    if (tail.length) tail = [...tail.slice(0, -1), ...pair];
+    else head = [...head.slice(0, -1), ...pair];
+  }
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return address;
+  const all = [...head, ...Array(missing).fill("0"), ...tail];
+  if (!all.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return address;
+  const n = all.map((g) => parseInt(g, 16));
+  if (v4 && n.slice(0, 5).every((g) => g === 0) && n[5] === 0xffff) return v4;
+  return n.slice(0, 4).map((g) => g.toString(16)).join(":") + "::/64";
 }
 
 /**

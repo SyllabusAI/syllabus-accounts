@@ -38,6 +38,8 @@ route, a secret, or a trust boundary changes.
 
 1. **Internet to Worker.** Everything arrives over TLS at Cloudflare's edge.
    `CF-Connecting-IP` is set by the edge and is the only client address used.
+   An IPv6 address is keyed by its /64, which one home or phone can fill
+   with fresh addresses at will (`clientAddress` in `src/limits.ts`).
 2. **Browser session vs. device bearer.** One middleware resolves either into
    `c.var.account`; `authKind` records which. Routes that administer the
    account call `browserOnly()`, so a device token can never enroll a Mac,
@@ -65,7 +67,7 @@ route, a secret, or a trust boundary changes.
 | `GET /me` | session or device | Read only |
 | `POST /device/start` | none | Per-address limit, global pending cap |
 | `POST /device/poll` | device code | Per-address limit answered as RFC 8628 `slow_down`, never 429 |
-| `GET /device?code=` | session | Per-account limit on code lookups |
+| `GET /device?code=` | session | 60 lookups per 10 min per account, 600 per address |
 | `POST /device/approve` | session, `browserOnly` | `sameOrigin`; 30 per 10 min per account, 300 per address |
 | `POST /device/revoke` | device | Bearer, not a cookie |
 | `POST /devices/:id/revoke`, `/devices/revoke-all` | session, `browserOnly` | `sameOrigin` |

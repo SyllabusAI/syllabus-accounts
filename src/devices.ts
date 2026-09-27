@@ -99,11 +99,17 @@ devices.get("/device", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent(c.req.path + (c.req.url.includes("?") ? "?" + c.req.url.split("?")[1] : "")));
   const code = normalizeUserCode(c.req.query("code") ?? "");
-  // Per account: a signed-in guesser learns from this page whether a code is
-  // live, so it is limited like the approval it leads to.
+  // A signed-in guesser learns from this page whether a code is live, so it
+  // is limited like the approval it leads to: per account, and per address
+  // so that a pile of accounts on one address gains nothing.
   if (code) {
-    const wait = await overLimit(c, `device-lookup:${account.id}`, LIMITS.deviceLookup);
-    if (wait !== null) return limitedPage(c, wait);
+    for (const [bucket, rule] of [
+      [`device-lookup:${account.id}`, LIMITS.deviceLookup],
+      [`device-lookup-ip:${source(c)}`, LIMITS.deviceLookupAddress],
+    ] as const) {
+      const wait = await overLimit(c, bucket, rule);
+      if (wait !== null) return limitedPage(c, wait);
+    }
   }
   let deviceName = "";
   if (code) {
