@@ -20,6 +20,7 @@ import type { AppEnv } from "./env";
 import { google } from "./google";
 import { accountPage, landing, privacyPage, termsPage } from "./pages";
 import { proxy } from "./proxy";
+import { assistant } from "./assistant";
 import { panelUrl, relay, relayState } from "./relay";
 import { billing, billingView } from "./billing";
 import { settings } from "./settings";
@@ -139,6 +140,7 @@ app.route("/", settings);
 app.route("/", billing);
 app.route("/", drive);
 app.route("/", proxy);
+app.route("/", assistant);
 
 app.notFound((c) => c.text("Not found", 404));
 app.onError((err, c) => {

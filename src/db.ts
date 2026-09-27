@@ -373,13 +373,17 @@ export async function deleteDriveGrant(db: D1Database, accountId: string): Promi
 
 // --- Proxy usage, allowances, and rate limiting ------------------------------
 
-export type UsageKind = "transcribe" | "summarize";
+/**
+ * Units are audio seconds for transcribe, tokens for summarize, and
+ * millionths of a dollar for assistant (see src/assistant.ts for why).
+ */
+export type UsageKind = "transcribe" | "summarize" | "assistant";
 
 export type Allowance = {
   account_id: string;
   audio_seconds: number;
   summary_tokens: number;
-  /** Pro's study sessions. Written, never enforced yet; see migrations/0010. */
+  /** Pro's study sessions, enforced by /proxy/assistant; see migrations/0015. */
   assistant_sessions: number;
   source: string;
   updated_at: string;
@@ -425,6 +429,15 @@ export async function usedThisPeriod(
     .bind(accountId, kind, period)
     .first<{ total: number }>();
   return row?.total ?? 0;
+}
+
+/** Study assistant sessions this account has opened this period (migrations/0015). */
+export async function assistantSessionsThisPeriod(db: D1Database, accountId: string, period = usagePeriod()): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS n FROM assistant_sessions WHERE account_id = ? AND period = ?")
+    .bind(accountId, period)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
 }
 
 /** One upstream call that happened. Never carries audio or transcript text. */
