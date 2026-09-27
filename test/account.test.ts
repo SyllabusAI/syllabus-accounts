@@ -12,7 +12,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-type Call = { method: string; url: string };
+type Call = { method: string; url: string; body: string };
 
 /**
  * Stripe and Google, scripted. `subs` is what Stripe says each customer holds;
@@ -25,7 +25,7 @@ function outside(opts: { subs?: Record<string, { id: string; status: string }[]>
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input instanceof Request ? input.url : input);
       const method = (init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-      calls.push({ method, url });
+      calls.push({ method, url, body: typeof init.body === "string" ? init.body : String(init.body ?? "") });
       const json = (status: number, payload: unknown) =>
         new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
       if (url.startsWith("https://oauth2.googleapis.com/revoke")) return json(200, {});
@@ -271,7 +271,9 @@ describe("deleting", () => {
     expect(Object.keys(theirs.left).sort()).toEqual(Object.keys(before.left).sort());
 
     // Drive was revoked at Google with the stored token.
-    expect(calls.some((c) => c.url.includes("oauth2.googleapis.com/revoke?token=1%2F%2Frefresh-to-revoke"))).toBe(true);
+    const revoke = calls.find((c) => c.url.startsWith("https://oauth2.googleapis.com/revoke"));
+    expect(revoke?.url).toBe("https://oauth2.googleapis.com/revoke");
+    expect(new URLSearchParams(revoke!.body).get("token")).toBe("1//refresh-to-revoke");
   });
 
   it("cancels the live subscription at Stripe, including one only Stripe knows about", async () => {

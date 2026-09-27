@@ -185,8 +185,19 @@ export async function revokeAtGoogle(env: Pick<Bindings, "DB" | "DRIVE_KEY">, ac
 export async function revokeGrantAtGoogle(env: Pick<Bindings, "DRIVE_KEY">, grant: db.DriveGrant | null): Promise<void> {
   if (!grant || grant.revoked_at) return;
   try {
+    // TODO(#38): whichever of #36 and #38 lands second makes this
+    // `await openGrant(env, grant)` from src/drive-keys.ts (and widens `env`
+    // to include DRIVE_KEY_PREVIOUS), so a grant sealed under the retired key
+    // is still revoked at Google, and deletes #38's own copy of this in
+    // /drive/disconnect in favor of revokeAtGoogle.
     const token = await decrypt(env.DRIVE_KEY, grant.refresh_token_enc);
-    await fetch(REVOKE_URL + "?" + new URLSearchParams({ token }), { method: "POST" });
+    // In the body rather than the query string, where a URL would carry the
+    // refresh token into any log that records one.
+    await fetch(REVOKE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+    });
   } catch (err) {
     console.log(`could not revoke the drive grant at Google: ${(err as Error).message}`);
   }
