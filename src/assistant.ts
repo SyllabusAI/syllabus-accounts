@@ -62,6 +62,7 @@ import * as db from "./db";
 import type { AppEnv } from "./env";
 import { allowanceFor, boundedBody, isRefusal, label, providerFailed, refuse, type Refusal } from "./proxy";
 import { now, randomId } from "./util";
+import { log } from "./log";
 
 // --- What is fixed here, and not by a caller --------------------------------
 
@@ -597,7 +598,7 @@ async function relayStream(
             takeUsage(ev.usage);
             break;
           case "error":
-            console.log(`assistant: the provider stream failed (${ev.error?.type ?? "unknown"})`);
+            log(`assistant: the provider stream failed (${ev.error?.type ?? "unknown"})`);
             failed = true;
             break;
         }
@@ -675,7 +676,7 @@ assistant.post("/proxy/assistant", async (c) => {
 
   const allowed = await allowanceFor(c.env.DB, account.id);
   if ((await db.usedGlobally(c.env.DB, "assistant")) + estimate > ASSISTANT_CEILING) {
-    console.log(`assistant: the ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
+    log(`assistant: the ceiling for ${db.usagePeriod()} is reached; refusing until it is raised`);
     return c.json({ error: "service_ceiling", kind: "assistant", period: db.usagePeriod() }, 402);
   }
 
