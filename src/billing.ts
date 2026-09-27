@@ -17,12 +17,11 @@
  */
 
 import { Hono, type Context } from "hono";
-import Stripe from "stripe";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
-import { stripeClient } from "./stripe";
+import { deleteCustomer, endSubscription, isLive, missing, stripeClient } from "./stripe";
 import { entitlingSubscription, type TierName } from "./tiers";
 
 export const billing = new Hono<AppEnv>();
@@ -245,26 +244,22 @@ export async function billingView(c: Context<AppEnv>, accountId: string): Promis
   };
 }
 
-/**
- * Subscription statuses that can still charge somebody, or turn into one that
- * can. `canceled` and `incomplete_expired` are the two Stripe calls final.
- */
-const LIVE_STATUSES = new Set(["active", "trialing", "past_due", "unpaid", "incomplete", "paused"]);
-
-/** Whether a subscription in this status could still charge somebody. */
-export function isLive(status: string): boolean {
-  return LIVE_STATUSES.has(status);
-}
-
-function missing(err: unknown): boolean {
-  return err instanceof Stripe.errors.StripeError && err.code === "resource_missing";
-}
+/** What leaving Stripe came to, for the log and for the page that follows. */
+export type StripeExit = {
+  canceled: number;
+  /** Refunded to cards, in the smallest currency unit. */
+  refunded: number;
+  /** A refund was owed and did not go through; the log has what to issue by hand. */
+  refundFailed: boolean;
+};
 
 /**
- * Cancel, immediately, every subscription an account could still be charged for.
+ * Leave Stripe, for an account that is being deleted: cancel every
+ * subscription now, refund the unused time, then delete every customer.
  *
- * For deleting an account, which is why it is "now" and not "at the end of
- * the period": there is no account left to spend the rest of the month on.
+ * "Now" and not "at the end of the period", because there is no account left
+ * to spend the rest of the month on; the unused share goes back to the card
+ * instead (endSubscription in stripe.ts).
  *
  * Stripe is asked, not just the mirror. The mirror only knows what the
  * webhook managed to deliver, and a subscription whose `created` event never
@@ -274,25 +269,30 @@ function missing(err: unknown): boolean {
  * subscription or customer Stripe says does not exist is already the outcome
  * wanted and is not an error.
  *
- * Throws on anything else, before or during, so the caller can stop without
- * deleting: the one failure worth refusing a deletion over is one that leaves
- * somebody paying. An account that never reached Checkout makes no Stripe
- * call at all. Returns how many subscriptions were canceled.
+ * Throws if listing or canceling fails, before anything else is touched, so
+ * the caller can stop without deleting: the one failure worth refusing a
+ * deletion over is one that leaves somebody paying. A refund or a customer
+ * deletion that fails does not throw, because by then nobody is being
+ * charged; each is logged with Stripe's ids to finish from the dashboard.
+ * Deleting the customer removes the saved card and contact details; Stripe
+ * keeps the invoices and payments for its own records. An account that never
+ * reached Checkout makes no Stripe call at all.
  */
-export async function cancelEverySubscription(
+export async function leaveStripe(
   env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">,
   accountId: string,
-): Promise<number> {
+): Promise<StripeExit> {
+  const exit: StripeExit = { canceled: 0, refunded: 0, refundFailed: false };
   const mirrored = await db.subscriptionsOf(env.DB, accountId);
   const customers = new Set(mirrored.map((s) => s.stripe_customer_id).filter(Boolean));
   for (const id of await db.stripeCustomersOf(env.DB, accountId)) customers.add(id);
-  const live = new Set(mirrored.filter((s) => LIVE_STATUSES.has(s.status)).map((s) => s.stripe_subscription_id));
-  if (!customers.size && !live.size) return 0;
+  const live = new Set(mirrored.filter((s) => isLive(s.status)).map((s) => s.stripe_subscription_id));
+  if (!customers.size && !live.size) return exit;
   if (!env.STRIPE_SECRET_KEY) {
     // Nothing can be asked of Stripe. With a live subscription on record that
     // is a refusal; with none, there is nothing we know of to cancel.
     if (live.size) throw new Error("STRIPE_SECRET_KEY is not set, and a subscription is live");
-    return 0;
+    return exit;
   }
 
   const stripe = stripeClient(env);
@@ -300,21 +300,25 @@ export async function cancelEverySubscription(
     try {
       for await (const sub of stripe.subscriptions.list({ customer, status: "all", limit: 100 })) {
         // Stripe is the truth here; a mirror row it contradicts is stale.
-        if (LIVE_STATUSES.has(sub.status)) live.add(sub.id);
+        if (isLive(sub.status)) live.add(sub.id);
         else live.delete(sub.id);
       }
     } catch (err) {
       if (!missing(err)) throw err;
     }
   }
-  let canceled = 0;
   for (const id of live) {
+    const ended = await endSubscription(stripe, id);
+    if (ended.canceled) exit.canceled += 1;
+    exit.refunded += ended.refunded;
+    exit.refundFailed ||= ended.refundFailed;
+  }
+  for (const customer of customers) {
     try {
-      await stripe.subscriptions.cancel(id);
-      canceled += 1;
+      await deleteCustomer(stripe, customer);
     } catch (err) {
-      if (!missing(err)) throw err;
+      console.error(`stripe: customer ${customer} of deleted account ${accountId} was not deleted; delete it by hand: ${(err as Error).message}`);
     }
   }
-  return canceled;
+  return exit;
 }

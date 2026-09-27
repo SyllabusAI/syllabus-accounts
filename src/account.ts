@@ -10,11 +10,15 @@
  *
  * The order, and what happens when a step fails:
  *
- * 1. Stripe. Every subscription that could still charge is canceled now
- *    (cancelEverySubscription in billing.ts). If Stripe cannot be reached or
- *    refuses, NOTHING is deleted and the page says so: the one outcome worse
- *    than a deletion that did not happen is an account that is gone while its
- *    card is still being charged, with nothing left here to cancel from.
+ * 1. Stripe. Every subscription that could still charge is canceled now, the
+ *    unused part of the period is refunded to the card, and every Stripe
+ *    customer is deleted, which removes the saved card (leaveStripe in
+ *    billing.ts). If Stripe cannot be reached or refuses a cancel, NOTHING is
+ *    deleted and the page says so: the one outcome worse than a deletion that
+ *    did not happen is an account that is gone while its card is still being
+ *    charged, with nothing left here to cancel from. A refund or a customer
+ *    deletion that fails is logged to finish by hand and does not stop it,
+ *    because by then nobody is being charged.
  * 2. The database. Every row with the account in it goes in one D1 batch,
  *    and a keyed hash of the Google sub goes into trial_used in the same one,
  *    which is one transaction (deleteAccountData in db.ts), so the account is
@@ -37,7 +41,7 @@
  */
 
 import { Hono, type Context } from "hono";
-import { cancelEverySubscription, isLive } from "./billing";
+import { leaveStripe, type StripeExit } from "./billing";
 import { trialHash } from "./crypto";
 import * as db from "./db";
 import { revokeGrantAtGoogle } from "./drive";
@@ -45,6 +49,7 @@ import type { Account, AppEnv, Bindings } from "./env";
 import { accountDeletedPage, deleteAccountPage, reauthToDeletePage, type DeletionSummary } from "./pages";
 import { forgetRelay } from "./relay";
 import { browserOnly, clearSession, sameOrigin, sessionSignedInAt } from "./session";
+import { isLive } from "./stripe";
 import { TRIAL_USED_ALLOWANCE } from "./tiers";
 
 /**
@@ -117,10 +122,13 @@ account.post("/account/delete", async (c) => {
     return c.html(deleteAccountPage(who, await summaryFor(c, who), error), 400);
   }
 
-  // 1. Stripe, and stop here if it fails.
+  // 1. Stripe, and stop here if a cancel fails.
+  let stripe: StripeExit;
   try {
-    const canceled = await cancelEverySubscription(c.env, who.id);
-    if (canceled) console.log(`account ${who.id}: canceled ${canceled} subscription(s) before deleting`);
+    stripe = await leaveStripe(c.env, who.id);
+    if (stripe.canceled) {
+      console.log(`account ${who.id}: canceled ${stripe.canceled} subscription(s) and refunded ${stripe.refunded} before deleting`);
+    }
   } catch (err) {
     console.log(`account ${who.id}: deletion stopped, Stripe could not cancel: ${(err as Error).message}`);
     return c.html(
@@ -169,5 +177,5 @@ account.post("/account/delete", async (c) => {
   // 5. Signed out, and told.
   clearSession(c);
   console.log(`account ${who.id} deleted by its owner (${deviceIds.length} device(s))`);
-  return c.html(accountDeletedPage(who.email));
+  return c.html(accountDeletedPage(who.email, stripe));
 });

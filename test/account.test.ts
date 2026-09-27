@@ -14,11 +14,39 @@ afterEach(() => {
 
 type Call = { method: string; url: string; body: string };
 
+const DAY = 24 * 3600;
+
+/**
+ * A paid invoice covering a month, `daysUsed` of it gone. What a subscription
+ * canceled mid-period returns as its latest invoice.
+ */
+function paidInvoice(id: string, amountPaid: number, daysUsed: number) {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    id,
+    object: "invoice",
+    status: "paid",
+    amount_paid: amountPaid,
+    currency: "usd",
+    lines: { object: "list", data: [{ period: { start: now - daysUsed * DAY, end: now + (30 - daysUsed) * DAY } }] },
+  };
+}
+
 /**
  * Stripe and Google, scripted. `subs` is what Stripe says each customer holds;
- * `failCancel` makes every cancellation fail the way a Stripe error does.
+ * `invoices` is the latest invoice a canceled subscription comes back with;
+ * `failCancel` makes every cancellation fail the way a Stripe error does, and
+ * `failRefund` / `failCustomerDelete` the same for those two calls.
  */
-function outside(opts: { subs?: Record<string, { id: string; status: string }[]>; failCancel?: boolean } = {}) {
+function outside(
+  opts: {
+    subs?: Record<string, { id: string; status: string }[]>;
+    invoices?: Record<string, unknown>;
+    failCancel?: boolean;
+    failRefund?: boolean;
+    failCustomerDelete?: boolean;
+  } = {},
+) {
   const calls: Call[] = [];
   vi.stubGlobal(
     "fetch",
@@ -28,6 +56,7 @@ function outside(opts: { subs?: Record<string, { id: string; status: string }[]>
       calls.push({ method, url, body: typeof init.body === "string" ? init.body : String(init.body ?? "") });
       const json = (status: number, payload: unknown) =>
         new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
+      const refused = () => json(400, { error: { type: "invalid_request_error", message: "Stripe says no" } });
       if (url.startsWith("https://oauth2.googleapis.com/revoke")) return json(200, {});
       const u = new URL(url);
       if (u.hostname === "api.stripe.com" && u.pathname === "/v1/subscriptions" && method === "GET") {
@@ -37,13 +66,26 @@ function outside(opts: { subs?: Record<string, { id: string; status: string }[]>
       }
       const cancel = u.pathname.match(/^\/v1\/subscriptions\/([^/]+)$/);
       if (u.hostname === "api.stripe.com" && cancel && method === "DELETE") {
-        if (opts.failCancel) {
-          return json(400, { error: { type: "invalid_request_error", message: "Stripe says no" } });
-        }
+        if (opts.failCancel) return refused();
         if (cancel[1] === "sub_gone") {
           return json(404, { error: { type: "invalid_request_error", code: "resource_missing", message: "No such subscription" } });
         }
-        return json(200, { id: cancel[1], object: "subscription", status: "canceled" });
+        const invoice = opts.invoices?.[cancel[1]] ?? null;
+        return json(200, { id: cancel[1], object: "subscription", status: "canceled", customer: "cus_x", latest_invoice: invoice });
+      }
+      if (u.hostname === "api.stripe.com" && u.pathname === "/v1/invoice_payments" && method === "GET") {
+        const invoice = u.searchParams.get("invoice") ?? "";
+        const data = [{ object: "invoice_payment", status: "paid", amount_paid: 100_000, payment: { type: "payment_intent", payment_intent: `pi_${invoice}` } }];
+        return json(200, { object: "list", data, has_more: false, url: "/v1/invoice_payments" });
+      }
+      if (u.hostname === "api.stripe.com" && u.pathname === "/v1/refunds" && method === "POST") {
+        if (opts.failRefund) return refused();
+        return json(200, { id: "re_1", object: "refund", status: "succeeded" });
+      }
+      const customer = u.pathname.match(/^\/v1\/customers\/([^/]+)$/);
+      if (u.hostname === "api.stripe.com" && customer && method === "DELETE") {
+        if (opts.failCustomerDelete) return refused();
+        return json(200, { id: customer[1], object: "customer", deleted: true });
       }
       throw new Error(`unexpected fetch: ${method} ${url}`);
     }),
@@ -51,8 +93,13 @@ function outside(opts: { subs?: Record<string, { id: string; status: string }[]>
   return calls;
 }
 
-const cancels = (calls: Call[]) =>
-  calls.filter((c) => c.method === "DELETE").map((c) => new URL(c.url).pathname.split("/").pop());
+const stripeDeletes = (calls: Call[], kind: "subscriptions" | "customers") =>
+  calls
+    .filter((c) => c.method === "DELETE" && new URL(c.url).pathname.startsWith(`/v1/${kind}/`))
+    .map((c) => new URL(c.url).pathname.split("/").pop());
+const cancels = (calls: Call[]) => stripeDeletes(calls, "subscriptions");
+const refunds = (calls: Call[]) =>
+  calls.filter((c) => c.method === "POST" && c.url.includes("/v1/refunds")).map((c) => new URLSearchParams(c.body));
 
 /** An account with a row in every table that can hold one. */
 async function fullAccount(email: string) {
@@ -358,6 +405,86 @@ describe("deleting", () => {
     expect((await confirm(cookie, "free@example.com")).status).toBe(200);
     expect(calls).toEqual([]);
     expect(await db.accountById(env.DB, account.id)).toBeNull();
+  });
+
+  it("refunds the unused part of a paid month to the card, and says how much", async () => {
+    const mine = await fullAccount("refund@example.com");
+    const sub = `sub_${mine.account.id}`;
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "active" }] },
+      // $15 paid, 12 of 30 days used: 18 days, $9.00, are owed back.
+      invoices: { [sub]: paidInvoice("in_mid", 1500, 12) },
+    });
+    const res = await confirm(mine.cookie, "refund@example.com");
+    expect(res.status).toBe(200);
+
+    const [refund, ...more] = refunds(calls);
+    expect(more).toEqual([]);
+    expect(refund.get("payment_intent")).toBe("pi_in_mid");
+    const amount = Number(refund.get("amount"));
+    // A second or two of the test itself can pass, and the share rounds down.
+    expect(amount).toBeGreaterThanOrEqual(898);
+    expect(amount).toBeLessThanOrEqual(900);
+    expect(refund.get("metadata[subscription]")).toBe(sub);
+    expect(await res.text()).toContain(`$${(amount / 100).toFixed(2)} for its unused days is on its way back`);
+  });
+
+  it("refunds nothing for a trial or a free month, which paid nothing", async () => {
+    const mine = await fullAccount("trialing@example.com");
+    const sub = `sub_${mine.account.id}`;
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "trialing" }] },
+      invoices: { [sub]: paidInvoice("in_trial", 0, 3) },
+    });
+    const res = await confirm(mine.cookie, "trialing@example.com");
+    expect(res.status).toBe(200);
+    expect(cancels(calls)).toEqual([sub]);
+    expect(refunds(calls)).toEqual([]);
+    expect(calls.some((c) => c.url.includes("/v1/invoice_payments"))).toBe(false);
+    expect(await res.text()).not.toContain("unused days");
+  });
+
+  it("deletes the Stripe customer, after the subscription is canceled", async () => {
+    const mine = await fullAccount("forget-card@example.com");
+    const cus = `cus_${mine.account.id}`;
+    const calls = outside({ subs: { [cus]: [{ id: `sub_${mine.account.id}`, status: "active" }] } });
+    expect((await confirm(mine.cookie, "forget-card@example.com")).status).toBe(200);
+    expect(stripeDeletes(calls, "customers")).toEqual([cus]);
+    const order = calls.filter((c) => c.method === "DELETE").map((c) => new URL(c.url).pathname.split("/")[2]);
+    expect(order).toEqual(["subscriptions", "customers"]);
+  });
+
+  it("still deletes the account when the refund fails, and says it will be sent by hand", async () => {
+    const mine = await fullAccount("refund-fails@example.com");
+    const sub = `sub_${mine.account.id}`;
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "active" }] },
+      invoices: { [sub]: paidInvoice("in_fail", 1500, 10) },
+      failRefund: true,
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await confirm(mine.cookie, "refund-fails@example.com");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Your account is deleted");
+    expect(html).toContain("we will send it to");
+    expect(await db.accountById(env.DB, mine.account.id)).toBeNull();
+    // The canceled subscription still went, and so did the customer.
+    expect(cancels(calls)).toEqual([sub]);
+    expect(stripeDeletes(calls, "customers")).toEqual([`cus_${mine.account.id}`]);
+    // Logged with Stripe's ids, since the account row is gone.
+    expect(errors.mock.calls.flat().join(" ")).toMatch(new RegExp(`REFUND OWED.*${sub}.*in_fail`));
+    errors.mockRestore();
+  });
+
+  it("still deletes the account when Stripe will not delete the customer", async () => {
+    const mine = await fullAccount("customer-stays@example.com");
+    outside({ subs: {}, failCustomerDelete: true });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await confirm(mine.cookie, "customer-stays@example.com")).status).toBe(200);
+    expect(await db.accountById(env.DB, mine.account.id)).toBeNull();
+    expect(errors.mock.calls.flat().join(" ")).toContain(`cus_${mine.account.id}`);
+    errors.mockRestore();
   });
 
   it("ends every device token, and signs the browser out", async () => {

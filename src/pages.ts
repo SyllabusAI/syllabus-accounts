@@ -79,8 +79,9 @@ export function privacyPage(): string {
        <li>Disconnect Google Drive from your account page; the grant is revoked at Google for every Mac at once.
            You can also remove Syllabus under your Google account's third-party access settings.</li>
        <li>Delete your account and everything stored with it from your account page, under Delete your account. Any
-           plan is canceled, every Mac is signed out, your Drive connection is revoked, and the rest is erased. Stripe
-           keeps its own record of past payments. After a deletion we keep one thing: a one-way scrambled identifier
+           plan is canceled and the unused part of it refunded, every Mac is signed out, your Drive connection is
+           revoked, and the rest is erased. Your saved card and billing details are removed from Stripe, which keeps
+           only its own record of past payments. After a deletion we keep one thing: a one-way scrambled identifier
            made from your Google sign-in, used only to stop the free trial being given out twice. It cannot be turned
            back into your name or email, and nothing else is kept with it.</li>
      </ul>
@@ -174,7 +175,7 @@ export function deleteAccountPage(account: Account, summary: DeletionSummary, er
   const macs = summary.macs === 1 ? "Your Mac is" : summary.macs > 1 ? `All ${summary.macs} of your Macs are` : "";
   const items = [
     summary.plan
-      ? "<li>Your plan is canceled right away. You are not charged again, and the rest of the current billing period is not refunded.</li>"
+      ? "<li>Your plan is canceled right away and you are not charged again. The unused part of the current billing period is refunded to the card you paid with.</li>"
       : "",
     macs ? `<li>${macs} signed out and removed. Syllabus on a Mac asks you to sign in again the next time you open it.</li>` : "",
     summary.drive ? "<li>Your Google Drive connection is revoked. The notes already in your Drive stay there.</li>" : "",
@@ -185,8 +186,8 @@ export function deleteAccountPage(account: Account, summary: DeletionSummary, er
     `${error ? `<p class="warn">${h(error)}</p>` : ""}
      <p>This permanently deletes the Syllabus account for <strong>${h(account.email)}</strong>. It cannot be undone.</p>
      <ul>${items}</ul>
-     <p class="muted">Recordings and notes on your Mac and in your Google Drive are not touched. Stripe keeps its own
-        record of any past payments and invoices. We keep one scrambled identifier made from your Google sign-in, which
+     <p class="muted">Recordings and notes on your Mac and in your Google Drive are not touched. Your saved card and
+        billing details are removed from Stripe, which keeps only its own record of past payments and invoices. We keep one scrambled identifier made from your Google sign-in, which
         cannot be turned back into your name or email, only so the free trial is not given out twice. Signing in again
         later with the same Google account starts a new, empty account without a free trial.</p>
      <form method="post" action="/account/delete">
@@ -213,10 +214,18 @@ export function reauthToDeletePage(account: Account, minutes: number): string {
 }
 
 /** After the deletion: signed out, and nothing left here. */
-export function accountDeletedPage(email: string): string {
+export function accountDeletedPage(email: string, stripe: { refunded: number; refundFailed: boolean }): string {
+  const refund = stripe.refundFailed
+    ? `<p>Your plan is canceled. The refund for its unused days did not go through on its own, so we will send it to
+        your card ourselves. You do not need to do anything.</p>`
+    : stripe.refunded
+      ? `<p>Your plan is canceled, and $${(stripe.refunded / 100).toFixed(2)} for its unused days is on its way back to
+          your card. Refunds usually show up within 5 to 10 business days.</p>`
+      : "";
   return page(
     "Your account is deleted",
     `<p>Everything Syllabus stored for <strong>${h(email)}</strong> is gone, and you are signed out.</p>
+     ${refund}
      <p>Syllabus on your Macs will ask you to sign in again. Your recordings and notes are still on your Mac and in
         your Google Drive.</p>
      <p class="muted">You can also remove Syllabus from your Google account under

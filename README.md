@@ -27,10 +27,15 @@ their Google Drive grant.
 - **Delete the account.** `/account/delete` (signed in with Google within the
   last 10 minutes, or it asks you to sign in again) says what goes and asks
   for the account's email typed back. The `POST` cancels any live Stripe
-  subscription first, and deletes nothing if Stripe cannot do that; then it
-  deletes every row that names the account in one D1 transaction (so every
-  device token dies with it), revokes the Drive grant at Google, drops each
-  Mac's relay socket, and signs the browser out. Two things stay: `stripe_events`
+  subscription first, and deletes nothing if Stripe cannot do that. It refunds
+  the unused share of the latest paid invoice to the card and deletes every
+  linked Stripe customer (the saved card and contact details; Stripe keeps its
+  own invoices and payments). A refund or customer deletion that fails does not
+  stop the deletion; it is logged with Stripe's ids (`REFUND OWED` for a
+  refund) to finish from the dashboard. Then it deletes every row that names
+  the account in one D1 transaction (so every device token dies with it),
+  revokes the Drive grant at Google, drops each Mac's relay socket, and signs
+  the browser out. Two things stay: `stripe_events`
   rows with the account id blanked, so a redelivered webhook is still
   recognized, and one row in `trial_used`, a keyed HMAC of the Google `sub`
   (never the sub or the email). Signing in again with the same Google account
@@ -39,6 +44,11 @@ their Google Drive grant.
   and Checkout starts its plan without a Stripe trial. Paid plans work as for
   anybody else. An account that has held a subscription before gets no second
   Stripe trial either, so canceling and subscribing again is not a way around it.
+  A Checkout that was open in another tab and finishes after the deletion
+  starts a subscription for an account that is gone; the webhook sees the
+  stamped account is missing, cancels and refunds that subscription, and
+  deletes its customer unless a live account still uses it. A top-up paid
+  that way is refunded in full.
 
 ## The device flow
 
