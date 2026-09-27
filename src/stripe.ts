@@ -219,8 +219,15 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
     // failure throws, which releases the claim and has Stripe retry.
     if (isLive(sub.status)) {
       try {
-        await stripeClient(c.env).subscriptions.cancel(sub.id);
-        console.log(`stripe: canceled ${sub.id}, which started after its account was deleted`);
+        // Asked first, because events arrive out of order: an old `active`
+        // event for the subscription the deletion itself canceled is common,
+        // and canceling a canceled subscription is an error, not a no-op.
+        const stripe = stripeClient(c.env);
+        const current = await stripe.subscriptions.retrieve(sub.id);
+        if (isLive(current.status)) {
+          await stripe.subscriptions.cancel(sub.id);
+          console.log(`stripe: canceled ${sub.id}, which started after its account was deleted`);
+        }
       } catch (err) {
         if (!(err instanceof Stripe.errors.StripeError && err.code === "resource_missing")) throw err;
       }

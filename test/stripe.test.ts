@@ -237,7 +237,10 @@ describe("an account that was deleted", () => {
           body: new URLSearchParams(typeof init.body === "string" ? init.body : ""),
         });
         const status = fail ? 500 : 200;
-        const payload = fail ? { error: { type: "api_error", message: "Stripe is down" } } : { id: "x", object: "thing" };
+        const live = url.pathname.split("/").pop() ?? "";
+        const payload = fail
+          ? { error: { type: "api_error", message: "Stripe is down" } }
+          : { id: live, object: "subscription", status: live.startsWith("sub_already") ? "canceled" : "active" };
         return new Response(JSON.stringify(payload), { status, headers: { "Content-Type": "application/json" } });
       }),
     );
@@ -255,7 +258,10 @@ describe("an account that was deleted", () => {
       metadata: { account_id: "an-account-deleted-before-checkout-finished" },
     });
     expect((await deliver(event)).status).toBe(200);
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["DELETE /v1/subscriptions/sub_after_deletion"]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "GET /v1/subscriptions/sub_after_deletion",
+      "DELETE /v1/subscriptions/sub_after_deletion",
+    ]);
     expect(await db.subscriptionById(env.DB, "sub_after_deletion")).toBeNull();
   });
 
@@ -272,7 +278,18 @@ describe("an account that was deleted", () => {
     // The claim was released, so the redelivery does the work.
     const calls = stripeApi();
     expect((await deliver(event)).status).toBe(200);
-    expect(calls.map((c) => c.path)).toEqual(["/v1/subscriptions/sub_orphan_retry"]);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+  });
+
+  it("does not try to cancel again when a stale event arrives for a subscription the deletion canceled", async () => {
+    const calls = stripeApi();
+    const event = subscriptionEvent("customer.subscription.updated", {
+      id: "sub_already_canceled",
+      status: "active",
+      metadata: { account_id: "an-account-whose-deletion-canceled-this" },
+    });
+    expect((await deliver(event)).status).toBe(200);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/subscriptions/sub_already_canceled"]);
   });
 
   it("refunds a top-up paid after its account was deleted", async () => {
