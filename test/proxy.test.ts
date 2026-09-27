@@ -3,10 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
 import { mp4DurationSeconds } from "../src/mp4";
 import { GLOBAL_CEILING, TRIAL_ALLOWANCE } from "../src/proxy";
-import { claimDevice, get, grant, ORIGIN, postJson } from "./helpers";
+import { claimDevice, freezeClockJustBeforeAWindowEnds, get, grant, ORIGIN, postJson, rateLimitWindows } from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 /** The provider, scripted. Records every upstream call so a test can inspect it. */
@@ -275,15 +276,20 @@ describe("transcription", () => {
   });
 
   it("rate limits an account that floods it", async () => {
+    // The limit is per fixed minute; a slow runner could cross into the next
+    // one halfway through and let all 22 through. Freeze the clock instead.
+    const frozenAt = freezeClockJustBeforeAWindowEnds();
     const calls = upstream(transcriptionOk());
-    const { token } = await claimDevice("flood@example.com");
+    const { account, token } = await claimDevice("flood@example.com");
     const statuses: number[] = [];
     for (let i = 0; i < 22; i++) statuses.push((await postAudio(m4aForm(60, 60), bearer(token))).status);
 
     expect(statuses.filter((s) => s === 200)).toHaveLength(20);
     expect(statuses.filter((s) => s === 429)).toHaveLength(2);
     expect(calls).toHaveLength(20);
-  });
+    expect(await rateLimitWindows("transcribe:" + account.id)).toEqual([Math.floor(frozenAt / 60_000) * 60]);
+    // 22 uploads, which a slow runner has taken 4.9 s over; the default is 5.
+  }, 30_000);
 });
 
 describe("summarizing", () => {
@@ -418,6 +424,7 @@ describe("summarizing", () => {
   });
 
   it("rate limits summarizing more tightly than transcribing", async () => {
+    freezeClockJustBeforeAWindowEnds(); // the same fixed minute as above
     const calls = upstream(summaryOk());
     const { token } = await claimDevice("sumflood@example.com");
     const statuses: number[] = [];
@@ -427,7 +434,7 @@ describe("summarizing", () => {
     expect(statuses.filter((s) => s === 200)).toHaveLength(5);
     expect(statuses.filter((s) => s === 429)).toHaveLength(2);
     expect(calls).toHaveLength(5);
-  });
+  }, 30_000);
 });
 
 describe("what is left", () => {

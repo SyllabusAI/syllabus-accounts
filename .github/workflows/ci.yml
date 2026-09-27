@@ -84,7 +84,7 @@ jobs:
               echo "::error::tests failed (exit $status)"
               exit $status
             fi
-            echo "::warning::attempt $attempt hung and was killed; retrying (known vitest-pool-workers startup deadlock)"
+            echo "::warning::attempt $attempt hung and was killed; retrying (suspect a test socket nothing waits on, see above)"
           done
           echo "::error::the test run hung on every attempt"
           exit 1
