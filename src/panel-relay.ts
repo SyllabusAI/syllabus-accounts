@@ -47,6 +47,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Bindings } from "./env";
 import { panelNotConnectedPage } from "./pages";
 import { fromBase64, now, randomId, toBase64 } from "./util";
+import { log } from "./log";
 
 /** How long a relayed request may wait for the panel before it is a 504 and the socket is presumed dead. */
 export const REQUEST_TIMEOUT_MS = 25_000;
@@ -235,7 +236,7 @@ export class PanelRelay extends DurableObject<Bindings> {
       /* already closed */
     }
     if (this.panel() !== null) return; // replaced, not gone
-    console.log(`panel socket ${why}`);
+    log(`panel socket ${why}`);
     await this.update({ disconnected_at: now() });
     const state = await this.state();
     for (const id of [...this.pending.keys()]) this.finish(id, this.notConnected(state, "/api/"));
@@ -279,7 +280,7 @@ export class PanelRelay extends DurableObject<Bindings> {
       const p = this.pending.get(id);
       if (p) clearTimeout(p.timer);
       this.pending.delete(id);
-      console.log(`could not send to the panel: ${err instanceof Error ? err.message : String(err)}`);
+      log(`could not send to the panel: ${err instanceof Error ? err.message : String(err)}`);
       return this.notConnected(await this.state(), url.pathname);
     }
     return answer;
@@ -288,7 +289,7 @@ export class PanelRelay extends DurableObject<Bindings> {
   /** The Mac did not answer in time: it has probably gone to sleep with the socket half open. */
   private async timedOut(id: string, ws: WebSocket): Promise<void> {
     if (!this.pending.has(id)) return;
-    console.log(`panel did not answer request ${id} in ${REQUEST_TIMEOUT_MS} ms; closing its socket`);
+    log(`panel did not answer request ${id} in ${REQUEST_TIMEOUT_MS} ms; closing its socket`);
     this.finish(
       id,
       new Response("The Mac running this Syllabus did not answer. It may have gone to sleep. Try again in a moment.", {

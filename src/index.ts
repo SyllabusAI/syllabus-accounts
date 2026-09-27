@@ -26,6 +26,7 @@ import { stripeHooks } from "./stripe";
 import { drive } from "./drive";
 import { sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
+import { log } from "./log";
 
 const app = new Hono<AppEnv>();
 
@@ -131,7 +132,7 @@ app.route("/", proxy);
 
 app.notFound((c) => c.text("Not found", 404));
 app.onError((err, c) => {
-  console.log(`error: ${err.message}`);
+  log(`error: ${err.message}`);
   return c.text("Something went wrong", 500);
 });
 

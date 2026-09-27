@@ -18,6 +18,7 @@ import type { AppEnv } from "./env";
 import { approvedPage, devicePage } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
+import { log } from "./log";
 
 export const CODE_SECONDS = 900;
 export const POLL_INTERVAL = 5;
@@ -104,7 +105,7 @@ devices.post("/device/start", async (c) => {
   // The limit above is per source; this one is not, so a spread-out flood
   // still cannot fill the table or exhaust the codes people have to read.
   if ((await db.pendingDeviceCodes(c.env.DB)) >= PENDING_CAP) {
-    console.log(`device/start refused: ${PENDING_CAP} claims already pending`);
+    log(`device/start refused: ${PENDING_CAP} claims already pending`);
     return c.json({ error: "too_many_pending" }, 503, { "Retry-After": String(CODE_SECONDS) });
   }
 
@@ -164,7 +165,7 @@ devices.post("/device/approve", async (c) => {
     await db.revokeDevice(c.env.DB, account.id, device.id);
     return c.html(devicePage(account, code, "", "That code was already used."), 400);
   }
-  console.log(`device ${device.id} (${name}) joined ${account.email}`);
+  log(`device ${device.id} joined account ${account.id}`);
   return c.html(approvedPage(account, name));
 });
 
@@ -228,6 +229,6 @@ devices.post("/devices/revoke-all", async (c) => {
   if (!account) return c.redirect("/login");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
   const removed = await db.revokeEverything(c.env.DB, account.id);
-  console.log(`${account.email} signed out every Mac (${removed})`);
+  log(`account ${account.id} signed out every Mac (${removed})`);
   return c.redirect("/");
 });
