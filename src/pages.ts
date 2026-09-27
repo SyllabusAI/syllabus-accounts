@@ -200,6 +200,18 @@ export function deleteAccountPage(account: Account, summary: DeletionSummary, er
   );
 }
 
+/** Before the confirmation step: a sign-in that is not recent enough to delete with. */
+export function reauthToDeletePage(account: Account, minutes: number): string {
+  return page(
+    "Delete your account",
+    `<p>To delete the Syllabus account for <strong>${h(account.email)}</strong>, sign in with Google again first.
+        This makes sure it is really you, and not something else using this browser.</p>
+     <p class="muted">You then have ${minutes} minutes to confirm the deletion.</p>
+     <p><a href="/login?next=${encodeURIComponent("/account/delete")}"><button class="primary">Sign in again</button></a></p>
+     <p class="muted"><a href="/">Keep my account</a></p>`,
+  );
+}
+
 /** After the deletion: signed out, and nothing left here. */
 export function accountDeletedPage(email: string): string {
   return page(

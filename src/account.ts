@@ -2,7 +2,8 @@
  * Deleting an account, by the person it belongs to.
  *
  *   GET  /account/delete   (session) what is removed, and a box to type your email in
- *   POST /account/delete   (session, same origin, email typed) does it
+ *   POST /account/delete   (session signed in within REAUTH_MINUTES, same
+ *                           origin, email typed) does it
  *
  * A browser route only. A panel's device token lives on a laptop for months,
  * and a copy of one must never be enough to erase the account it belongs to.
@@ -40,9 +41,9 @@ import { trialHash } from "./crypto";
 import * as db from "./db";
 import { revokeAtGoogle } from "./drive";
 import type { Account, AppEnv, Bindings } from "./env";
-import { accountDeletedPage, deleteAccountPage, type DeletionSummary } from "./pages";
+import { accountDeletedPage, deleteAccountPage, reauthToDeletePage, type DeletionSummary } from "./pages";
 import { forgetRelay } from "./relay";
-import { browserOnly, clearSession, sameOrigin } from "./session";
+import { browserOnly, clearSession, sameOrigin, sessionSignedInAt } from "./session";
 import { TRIAL_USED_ALLOWANCE } from "./tiers";
 
 /**
@@ -57,6 +58,24 @@ export async function applyTrialBlock(env: Pick<Bindings, "DB" | "SESSION_SECRET
 }
 
 export const account = new Hono<AppEnv>();
+
+/**
+ * How recent a Google sign-in has to be to delete with.
+ *
+ * Why a fresh sign-in at all: a Mac's panel is relayed at /p/<device>/ on
+ * THIS origin, with its own inline scripts (relay.ts). So a script in a
+ * panel page is same-origin with the account: it can read this page, see the
+ * email, and post the form with a correct Origin. Typing the email proves
+ * nothing to such a script, and a copy of a device token is enough to be the
+ * panel. A sign-in within the last few minutes is something only a person
+ * clicking through Google's account chooser can produce.
+ */
+export const REAUTH_MINUTES = 10;
+
+async function signedInRecently(c: Context<AppEnv>): Promise<boolean> {
+  const at = await sessionSignedInAt(c);
+  return at > 0 && Date.now() - at <= REAUTH_MINUTES * 60 * 1000;
+}
 
 async function summaryFor(c: Context<AppEnv>, who: Account): Promise<DeletionSummary> {
   const [devices, grant, subs] = await Promise.all([
@@ -76,6 +95,7 @@ account.get("/account/delete", async (c) => {
   if (refusal) return refusal;
   const who = c.get("account");
   if (!who) return c.redirect("/login?next=" + encodeURIComponent("/account/delete"));
+  if (!(await signedInRecently(c))) return c.html(reauthToDeletePage(who, REAUTH_MINUTES));
   return c.html(deleteAccountPage(who, await summaryFor(c, who), ""));
 });
 
@@ -85,6 +105,7 @@ account.post("/account/delete", async (c) => {
   const who = c.get("account");
   if (!who) return c.redirect("/login?next=" + encodeURIComponent("/account/delete"));
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
+  if (!(await signedInRecently(c))) return c.html(reauthToDeletePage(who, REAUTH_MINUTES), 403);
 
   const form = await c.req.parseBody();
   const typed = String(form.confirm_email ?? "").trim().toLowerCase();

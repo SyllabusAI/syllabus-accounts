@@ -4,6 +4,8 @@ import { encrypt, trialHash } from "../src/crypto";
 import { toBase64Url } from "../src/util";
 import * as db from "../src/db";
 import type { WelcomeFrame } from "../src/panel-relay";
+import { serializeSigned } from "hono/utils/cookie";
+import { SESSION_COOKIE } from "../src/session";
 import { claimDevice, get, grant, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
 
 afterEach(() => {
@@ -180,6 +182,36 @@ describe("who may delete", () => {
     expect(res.status).toBe(403);
     expect(await db.accountById(env.DB, mine.account.id)).not.toBeNull();
     expect((await get("/account/delete", { Authorization: `Bearer ${mine.token}` })).status).toBe(403);
+  });
+
+  it("needs a Google sign-in from the last few minutes, not just a live session", async () => {
+    // A panel page is relayed on this origin with its own scripts, so a
+    // script there could read the email and post the form with our Origin.
+    // Only a person at Google's account chooser makes a fresh sign-in.
+    const { account } = await signedInAs("stale@example.com");
+    const stale = (
+      await serializeSigned(
+        SESSION_COOKIE,
+        JSON.stringify({ a: account.id, t: Date.now() - 11 * 60 * 1000 }),
+        env.SESSION_SECRET,
+        { path: "/" },
+      )
+    ).split(";")[0];
+    const page = await get("/account/delete", { Cookie: stale });
+    expect(page.status).toBe(200);
+    const text = await page.text();
+    expect(text).toContain("sign in with Google again first");
+    expect(text).toContain('href="/login?next=%2Faccount%2Fdelete"');
+    expect(text).not.toContain('action="/account/delete"');
+    expect(text).not.toContain("\u2014");
+
+    const calls = outside();
+    const res = await confirm(stale, "stale@example.com");
+    expect(res.status).toBe(403);
+    expect(calls).toEqual([]);
+    expect(await db.accountById(env.DB, account.id)).not.toBeNull();
+    // The same session is still good for everything else.
+    expect((await get("/me", { Cookie: stale })).status).toBe(200);
   });
 
   it("refuses a post from another site", async () => {

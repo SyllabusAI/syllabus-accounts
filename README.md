@@ -24,7 +24,8 @@ their Google Drive grant.
 - **Reach a panel over the web.** `/p/<device>/` relays a signed-in
   browser to that Mac's panel over a Durable Object socket, when the account
   owns it. Anyone else is told the panel is not theirs.
-- **Delete the account.** `/account/delete` (signed in) says what goes and asks
+- **Delete the account.** `/account/delete` (signed in with Google within the
+  last 10 minutes, or it asks you to sign in again) says what goes and asks
   for the account's email typed back. The `POST` cancels any live Stripe
   subscription first, and deletes nothing if Stripe cannot do that; then it
   revokes the Drive grant at Google, deletes every row that names the account
