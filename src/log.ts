@@ -25,3 +25,8 @@ export function scrub(text: string): string {
 export function log(line: string): void {
   console.log(scrub(line));
 }
+
+/** log() at error level, for a line somebody has to act on (a refund owed by hand). */
+export function logError(line: string): void {
+  console.error(scrub(line));
+}

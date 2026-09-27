@@ -24,7 +24,7 @@ import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { deleteCustomer, endSubscription, isLive, missing, stripeClient } from "./stripe";
 import { entitlingSubscription, type TierName } from "./tiers";
-import { log } from "./log";
+import { log, logError } from "./log";
 
 export const billing = new Hono<AppEnv>();
 
@@ -323,7 +323,7 @@ export async function leaveStripe(
     try {
       await deleteCustomer(stripe, customer);
     } catch (err) {
-      log(`stripe: customer ${customer} of deleted account ${accountId} was not deleted; delete it by hand: ${(err as Error).message}`);
+      logError(`stripe: customer ${customer} of deleted account ${accountId} was not deleted; delete it by hand: ${(err as Error).message}`);
     }
   }
   return exit;

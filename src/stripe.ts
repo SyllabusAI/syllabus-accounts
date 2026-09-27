@@ -34,7 +34,7 @@ import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
 import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
-import { log } from "./log";
+import { log, logError } from "./log";
 
 export const stripeHooks = new Hono<AppEnv>();
 
@@ -388,7 +388,7 @@ export async function endSubscription(stripe: Stripe, id: string, now = Date.now
     return { canceled: true, refunded: await refundUnused(stripe, sub, now), refundFailed: false };
   } catch (err) {
     const invoice = idOf(sub.latest_invoice);
-    log(
+    logError(
       `stripe: REFUND OWED, issue it by hand. Subscription ${sub.id} (customer ${idOf(sub.customer)}, invoice ${invoice || "none"}) ` +
         `was canceled but its unused time was not refunded: ${(err as Error).message}`,
     );
@@ -505,7 +505,7 @@ async function endOrphan(env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">, subscr
   try {
     await deleteCustomer(stripe, customer);
   } catch (err) {
-    log(`stripe: customer ${customer} of a deleted account was not deleted; delete it by hand: ${(err as Error).message}`);
+    logError(`stripe: customer ${customer} of a deleted account was not deleted; delete it by hand: ${(err as Error).message}`);
   }
 }
 

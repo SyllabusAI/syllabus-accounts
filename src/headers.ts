@@ -44,9 +44,11 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   const relayed = c.req.path.startsWith(PANEL_PREFIX);
   const extra: [string, string][] = [
     ["X-Content-Type-Options", "nosniff"],
-    ["Referrer-Policy", "same-origin"],
     ["X-Frame-Options", "DENY"],
   ];
+  // A route that chose a stricter policy keeps it: the panel handoff
+  // (panel-host.ts) sends no-referrer because its Location carries a ticket.
+  if (!c.res.headers.has("Referrer-Policy")) extra.push(["Referrer-Policy", "same-origin"]);
   if (c.env.PUBLIC_URL.startsWith("https://")) extra.push(["Strict-Transport-Security", HSTS]);
   const type = c.res.headers.get("Content-Type") ?? "";
   if (!relayed && type.startsWith("text/html")) {
