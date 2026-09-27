@@ -28,9 +28,9 @@ their Google Drive grant.
   last 10 minutes, or it asks you to sign in again) says what goes and asks
   for the account's email typed back. The `POST` cancels any live Stripe
   subscription first, and deletes nothing if Stripe cannot do that; then it
-  revokes the Drive grant at Google, deletes every row that names the account
-  in one D1 transaction (so every device token dies with it), drops each Mac's
-  relay socket, and signs the browser out. Two things stay: `stripe_events`
+  deletes every row that names the account in one D1 transaction (so every
+  device token dies with it), revokes the Drive grant at Google, drops each
+  Mac's relay socket, and signs the browser out. Two things stay: `stripe_events`
   rows with the account id blanked, so a redelivered webhook is still
   recognized, and one row in `trial_used`, a keyed HMAC of the Google `sub`
   (never the sub or the email). Signing in again with the same Google account

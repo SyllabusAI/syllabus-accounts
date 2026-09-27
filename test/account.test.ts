@@ -329,6 +329,27 @@ describe("deleting", () => {
     expect((await get("/me", { Authorization: `Bearer ${mine.token}` })).status).toBe(200);
   });
 
+  it("rolls every row back when the batch fails, and leaves Drive connected as the page says", async () => {
+    const mine = await fullAccount("half@example.com");
+    const deviceIds = await db.allDeviceIdsOf(env.DB, mine.account.id);
+    const before = await rowsNaming(mine.account.id, deviceIds);
+    const calls = outside({ subs: {} });
+    // The batch's second-to-last statement fails, after every DELETE before it
+    // has run, so a batch that was not one transaction would show here.
+    await env.DB.prepare("ALTER TABLE stripe_events RENAME TO stripe_events_away").run();
+    try {
+      const res = await confirm(mine.cookie, "half@example.com");
+      expect(res.status).toBe(500);
+      expect(await res.text()).toContain("Nothing else changed");
+    } finally {
+      await env.DB.prepare("ALTER TABLE stripe_events_away RENAME TO stripe_events").run();
+    }
+    expect((await rowsNaming(mine.account.id, deviceIds)).left).toEqual(before.left);
+    expect(await db.trialWasUsed(env.DB, await trialHash(env.SESSION_SECRET, mine.account.google_sub))).toBe(false);
+    expect(calls.some((c) => c.url.includes("oauth2.googleapis.com"))).toBe(false);
+    expect((await get("/me", { Authorization: `Bearer ${mine.token}` })).status).toBe(200);
+  });
+
   it("makes no Stripe call for an account that never reached Checkout", async () => {
     const { account, cookie } = await signedInAs("free@example.com");
     const calls = outside();

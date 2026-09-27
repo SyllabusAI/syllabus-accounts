@@ -178,7 +178,11 @@ drive.post("/drive/disconnect", async (c) => {
  * still remove Syllabus under their Google account's third-party access.
  */
 export async function revokeAtGoogle(env: Pick<Bindings, "DB" | "DRIVE_KEY">, accountId: string): Promise<void> {
-  const grant = await db.driveGrant(env.DB, accountId);
+  await revokeGrantAtGoogle(env, await db.driveGrant(env.DB, accountId));
+}
+
+/** revokeAtGoogle for a grant already read, so a caller can delete the row first. */
+export async function revokeGrantAtGoogle(env: Pick<Bindings, "DRIVE_KEY">, grant: db.DriveGrant | null): Promise<void> {
   if (!grant || grant.revoked_at) return;
   try {
     const token = await decrypt(env.DRIVE_KEY, grant.refresh_token_enc);

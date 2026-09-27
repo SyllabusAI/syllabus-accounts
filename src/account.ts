@@ -15,17 +15,18 @@
  *    refuses, NOTHING is deleted and the page says so: the one outcome worse
  *    than a deletion that did not happen is an account that is gone while its
  *    card is still being charged, with nothing left here to cancel from.
- * 2. Google Drive. The grant is revoked at Google, best effort, exactly as
- *    Disconnect does it. A Google failure is logged and does not stop the
- *    deletion: the stored token is deleted in the next step either way, so
- *    this service can never use it again.
- * 3. The database. Every row with the account in it goes in one D1 batch,
+ * 2. The database. Every row with the account in it goes in one D1 batch,
  *    and a keyed hash of the Google sub goes into trial_used in the same one,
  *    which is one transaction (deleteAccountData in db.ts), so the account is
  *    never left half deleted. Device tokens are rows in it, so every Mac is
  *    signed out in the same instant. If the batch fails, the page says the
  *    plan is canceled and nothing else changed, and trying again is safe:
- *    Stripe has nothing live left to cancel and Drive is asked again.
+ *    Stripe has nothing live left to cancel.
+ * 3. Google Drive. The grant read before step 2 is revoked at Google, best
+ *    effort, exactly as Disconnect does it. After the rows rather than
+ *    before, so a failed batch leaves Drive working as the page says. A
+ *    Google failure is logged and changes nothing: the stored token is
+ *    already deleted, so this service can never use it again.
  * 4. The relay. Each device's object drops its panel socket and forgets the
  *    Mac's name. Best effort: a socket left open reaches nothing, because
  *    /p/<device>/ looks the device up in the database and it is gone.
@@ -39,7 +40,7 @@ import { Hono, type Context } from "hono";
 import { cancelEverySubscription, isLive } from "./billing";
 import { trialHash } from "./crypto";
 import * as db from "./db";
-import { revokeAtGoogle } from "./drive";
+import { revokeGrantAtGoogle } from "./drive";
 import type { Account, AppEnv, Bindings } from "./env";
 import { accountDeletedPage, deleteAccountPage, reauthToDeletePage, type DeletionSummary } from "./pages";
 import { forgetRelay } from "./relay";
@@ -132,13 +133,14 @@ account.post("/account/delete", async (c) => {
     );
   }
 
-  // Read before the rows go: every relay object to clear afterwards.
-  const deviceIds = await db.allDeviceIdsOf(c.env.DB, who.id);
+  // Read before the rows go: every relay object to clear afterwards, and the
+  // Drive grant to revoke once the rows are gone.
+  const [deviceIds, driveGrant] = await Promise.all([
+    db.allDeviceIdsOf(c.env.DB, who.id),
+    db.driveGrant(c.env.DB, who.id),
+  ]);
 
-  // 2. Google Drive, best effort.
-  await revokeAtGoogle(c.env, who.id);
-
-  // 3. Every row, in one transaction.
+  // 2. Every row, in one transaction.
   try {
     await db.deleteAccountData(c.env.DB, who.id, await trialHash(c.env.SESSION_SECRET, who.google_sub));
   } catch (err) {
@@ -152,6 +154,10 @@ account.post("/account/delete", async (c) => {
       500,
     );
   }
+
+  // 3. Google Drive, best effort. After the rows, so a batch that failed
+  // above really did leave "nothing else changed", Drive included.
+  await revokeGrantAtGoogle(c.env, driveGrant);
 
   // 4. The relay, best effort.
   await Promise.all(
