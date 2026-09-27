@@ -399,6 +399,11 @@ export async function endSubscription(stripe: Stripe, id: string, now = Date.now
  * and gets nothing back. Rounded down to the cent, and never more than the
  * payment it is refunded against.
  *
+ * The sales tax goes back with it, and has to: `amount_paid` is the total
+ * including tax, so the refund carries the same share of the tax as of the
+ * price. Stripe Tax records a refund of an invoice's charge as a reversal,
+ * so the tax reports show it as refunded without a separate credit note.
+ *
  * The idempotency key is the subscription, so a retried deletion or a second
  * webhook for the same orphan can never refund one subscription twice.
  */

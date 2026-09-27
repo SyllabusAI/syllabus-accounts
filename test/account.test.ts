@@ -429,6 +429,23 @@ describe("deleting", () => {
     expect(await res.text()).toContain(`$${(amount / 100).toFixed(2)} for its unused days is on its way back`);
   });
 
+  it("gives the sales tax back with the price, in the same share", async () => {
+    const mine = await fullAccount("tax-back@example.com");
+    const sub = `sub_${mine.account.id}`;
+    // $15.00 plus Texas' 8.25%, $1.24: $16.24 paid. 18 of 30 days unused.
+    const invoice = { ...paidInvoice("in_taxed", 1624, 12), subtotal: 1500, total: 1624 };
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "active" }] },
+      invoices: { [sub]: invoice },
+    });
+    expect((await confirm(mine.cookie, "tax-back@example.com")).status).toBe(200);
+    const amount = Number(refunds(calls)[0].get("amount"));
+    // 60% of $16.24 is $9.74: $9.00 of price and $0.74 of tax. The price
+    // share alone would be $9.00, which would keep the tax.
+    expect(amount).toBeGreaterThanOrEqual(972);
+    expect(amount).toBeLessThanOrEqual(974);
+  });
+
   it("refunds nothing for a trial or a free month, which paid nothing", async () => {
     const mine = await fullAccount("trialing@example.com");
     const sub = `sub_${mine.account.id}`;
