@@ -504,9 +504,16 @@ export const RESERVATION_SECONDS = 900;
  * the INSERT only happens if its own WHERE still holds, and SQLite runs the
  * whole statement as one; the loser inserts nothing and gets null back.
  *
+ * `ceiling` is the limit across every account together, held in the same
+ * statement for the same reason: a ceiling read in one statement and a
+ * reservation written in another let every request in flight at the moment
+ * the ceiling was nearly reached through at once, from as many accounts as
+ * were asking.
+ *
  * Returns the reservation id to settle or release, or null when there is not
- * enough left. `used` in the refusal is what the total was at that moment,
- * reservations included.
+ * enough left under either limit; the caller reads which with usedGlobally.
+ * `used` in the refusal is what the total was at that moment, reservations
+ * included.
  */
 export async function reserveUsage(
   db: D1Database,
@@ -515,6 +522,7 @@ export async function reserveUsage(
   kind: UsageKind,
   units: number,
   allowed: number,
+  ceiling = Number.MAX_SAFE_INTEGER,
 ): Promise<{ id: string } | null> {
   const want = Math.max(0, Math.round(units));
   const period = usagePeriod();
@@ -524,9 +532,11 @@ export async function reserveUsage(
        SELECT ?, ?, ?, ?, ?, ?, ?, 'reserved'
         WHERE (SELECT COALESCE(SUM(units), 0) FROM usage
                 WHERE account_id = ? AND kind = ? AND period = ?) + ? <= ?
+          AND (SELECT COALESCE(SUM(units), 0) FROM usage
+                WHERE kind = ? AND period = ?) + ? <= ?
        RETURNING id`,
     )
-    .bind(randomId(12), accountId, deviceId, kind, want, period, now(), accountId, kind, period, want, allowed)
+    .bind(randomId(12), accountId, deviceId, kind, want, period, now(), accountId, kind, period, want, allowed, kind, period, want, ceiling)
     .first<{ id: string }>();
   return row ? { id: row.id } : null;
 }

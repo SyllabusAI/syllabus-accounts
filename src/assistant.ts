@@ -748,9 +748,13 @@ assistant.post("/proxy/assistant", async (c) => {
     "assistant",
     estimate,
     Math.max(1, allowed.assistant_sessions) * SESSION_COST_CAP,
+    ASSISTANT_CEILING,
   );
   if (!held) {
     await undoTake(c.env.DB, sessionId, estimate, escalation, opened);
+    if ((await db.usedGlobally(c.env.DB, "assistant")) + estimate > ASSISTANT_CEILING) {
+      return c.json({ error: "service_ceiling", kind: "assistant", period: db.usagePeriod() }, 402);
+    }
     return c.json({ error: "allowance_exhausted", kind: "assistant", unit: "dollars", period: db.usagePeriod() }, 402);
   }
 

@@ -410,8 +410,13 @@ proxy.post("/proxy/transcribe", async (c) => {
   }
   // Held before the call, not billed after it: a second request arriving at
   // the same moment sees this one's seconds already spoken for.
-  const held = await db.reserveUsage(c.env.DB, account.id, device.id, "transcribe", seconds, allowed.audio_seconds);
+  const held = await db.reserveUsage(
+    c.env.DB, account.id, device.id, "transcribe", seconds, allowed.audio_seconds, GLOBAL_CEILING.audio_seconds,
+  );
   if (!held) {
+    if ((await db.usedGlobally(c.env.DB, "transcribe")) + seconds > GLOBAL_CEILING.audio_seconds) {
+      return refuse(c, ceilingReached("transcribe"));
+    }
     const used = await db.usedThisPeriod(c.env.DB, account.id, "transcribe");
     return refuse(c, overAllowance("transcribe", used, seconds, allowed.audio_seconds));
   }
@@ -498,8 +503,13 @@ proxy.post("/proxy/summarize", async (c) => {
   // The estimate is held for the whole call and corrected to the real cost
   // below. Two summaries started together therefore cost the account two
   // estimates' worth of headroom, not one.
-  const held = await db.reserveUsage(c.env.DB, account.id, device.id, "summarize", estimate, allowed.summary_tokens);
+  const held = await db.reserveUsage(
+    c.env.DB, account.id, device.id, "summarize", estimate, allowed.summary_tokens, GLOBAL_CEILING.summary_tokens,
+  );
   if (!held) {
+    if ((await db.usedGlobally(c.env.DB, "summarize")) + estimate > GLOBAL_CEILING.summary_tokens) {
+      return refuse(c, ceilingReached("summarize"));
+    }
     const used = await db.usedThisPeriod(c.env.DB, account.id, "summarize");
     return refuse(c, overAllowance("summarize", used, estimate, allowed.summary_tokens));
   }
