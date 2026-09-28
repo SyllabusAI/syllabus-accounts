@@ -135,6 +135,23 @@ export function stripeClient(env: Pick<Bindings, "STRIPE_SECRET_KEY">): Stripe {
 }
 
 /**
+ * A Stripe client for ending a subscription and deleting its customer:
+ * account deletion (leaveStripe in billing.ts) and the orphan cleanup below.
+ *
+ * Built from STRIPE_ACCOUNT_DELETION_KEY, a key restricted to Subscriptions,
+ * Refunds and Customers (write), rather than STRIPE_SECRET_KEY, which every
+ * Checkout and Billing Portal request spends. A leak of that key then cannot
+ * cancel a subscription, issue a refund, or delete a customer. Falls back to
+ * STRIPE_SECRET_KEY when the restricted key is not yet set, so this behaves
+ * exactly as before until the Stripe dashboard has one to hand it.
+ */
+export function deletionStripeClient(env: Pick<Bindings, "STRIPE_ACCOUNT_DELETION_KEY" | "STRIPE_SECRET_KEY">): Stripe {
+  return new Stripe(env.STRIPE_ACCOUNT_DELETION_KEY || env.STRIPE_SECRET_KEY || "sk_unset", {
+    httpClient: Stripe.createFetchHttpClient(),
+  });
+}
+
+/**
  * Stripe's own verifier, told how to work inside workerd.
  *
  * The synchronous `constructEvent` throws here, so the async one is used with
@@ -185,7 +202,10 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       if (session.mode === "payment" && session.payment_status === "paid" && session.metadata?.kind === "topup") {
         const intent = idOf(session.payment_intent as string | { id?: string } | null);
         if (intent) {
-          await stripeClient(c.env).refunds.create({ payment_intent: intent }, { idempotencyKey: `orphan-topup:${session.id}` });
+          await deletionStripeClient(c.env).refunds.create(
+            { payment_intent: intent },
+            { idempotencyKey: `orphan-topup:${session.id}` },
+          );
           log(`stripe: refunded top-up ${session.id}, paid after its account was deleted`);
         }
       }
@@ -485,7 +505,10 @@ export async function deleteCustomer(stripe: Stripe, id: string): Promise<boolea
  * charged.
  */
 async function endOrphan(
-  env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY" | "STRIPE_PRICE_STARTER" | "STRIPE_PRICE_STANDARD" | "STRIPE_PRICE_PRO">,
+  env: Pick<
+    Bindings,
+    "DB" | "STRIPE_SECRET_KEY" | "STRIPE_ACCOUNT_DELETION_KEY" | "STRIPE_PRICE_STARTER" | "STRIPE_PRICE_STANDARD" | "STRIPE_PRICE_PRO"
+  >,
   subscriptionId: string,
   customerId: string,
 ): Promise<void> {
@@ -508,7 +531,8 @@ async function endOrphan(
     log(`stripe: ${subscriptionId} names a deleted account but is not a Syllabus price; left alone`);
     return;
   }
-  const ended = await endSubscription(stripe, subscriptionId);
+  const deletion = deletionStripeClient(env);
+  const ended = await endSubscription(deletion, subscriptionId);
   log(
     `stripe: canceled ${subscriptionId}, which started after its account was deleted` +
       (ended.refunded ? `; refunded ${ended.refunded}` : ""),
@@ -520,7 +544,7 @@ async function endOrphan(
     (await db.accountIdForLinkedCustomer(env.DB, customer)) || (await db.accountIdForCustomer(env.DB, customer));
   if (inUse) return;
   try {
-    await deleteCustomer(stripe, customer);
+    await deleteCustomer(deletion, customer);
   } catch (err) {
     log(`stripe: customer ${customer} of a deleted account was not deleted; delete it by hand: ${(err as Error).message}`);
   }

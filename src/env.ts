@@ -93,6 +93,19 @@ export type Bindings = {
    * Billing Portal sessions in the next slice.
    */
   STRIPE_SECRET_KEY?: string;
+  /**
+   * Secret, OPTIONAL: a Stripe key restricted to Subscriptions, Refunds and
+   * Customers (write), used only to cancel a subscription, refund its unused
+   * time, and delete a customer (deletionStripeClient in stripe.ts).
+   * `wrangler secret put STRIPE_ACCOUNT_DELETION_KEY`.
+   *
+   * A separate key from STRIPE_SECRET_KEY, which every request to Checkout
+   * and the Billing Portal spends, so a leak of that key cannot cancel a
+   * subscription, issue a refund, or delete a customer. Unset falls back to
+   * STRIPE_SECRET_KEY, so this deploys safely before the restricted key
+   * exists in the Stripe dashboard and starts being used the moment it does.
+   */
+  STRIPE_ACCOUNT_DELETION_KEY?: string;
 };
 
 export type Account = {

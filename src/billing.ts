@@ -22,7 +22,7 @@ import type { AppEnv, Bindings } from "./env";
 import { LIMITS, limitedPage, overLimit } from "./limits";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
-import { deleteCustomer, endSubscription, isLive, missing, stripeClient } from "./stripe";
+import { deleteCustomer, deletionStripeClient, endSubscription, isLive, missing, stripeClient } from "./stripe";
 import { entitlingSubscription, type TierName } from "./tiers";
 import { log } from "./log";
 
@@ -283,9 +283,13 @@ export type StripeExit = {
  * Deleting the customer removes the saved card and contact details; Stripe
  * keeps the invoices and payments for its own records. An account that never
  * reached Checkout makes no Stripe call at all.
+ *
+ * Listing subscriptions is read-only and stays on STRIPE_SECRET_KEY; ending
+ * one and deleting its customer go through STRIPE_ACCOUNT_DELETION_KEY
+ * (deletionStripeClient in stripe.ts), a key restricted to just that.
  */
 export async function leaveStripe(
-  env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY">,
+  env: Pick<Bindings, "DB" | "STRIPE_SECRET_KEY" | "STRIPE_ACCOUNT_DELETION_KEY">,
   accountId: string,
 ): Promise<StripeExit> {
   const exit: StripeExit = { canceled: 0, refunded: 0, refundFailed: false };
@@ -301,7 +305,11 @@ export async function leaveStripe(
     return exit;
   }
 
+  // Listing is read-only, so it stays on the general key; canceling,
+  // refunding and deleting go through the one restricted to that
+  // (deletionStripeClient in stripe.ts).
   const stripe = stripeClient(env);
+  const deletion = deletionStripeClient(env);
   for (const customer of customers) {
     try {
       for await (const sub of stripe.subscriptions.list({ customer, status: "all", limit: 100 })) {
@@ -314,14 +322,14 @@ export async function leaveStripe(
     }
   }
   for (const id of live) {
-    const ended = await endSubscription(stripe, id);
+    const ended = await endSubscription(deletion, id);
     if (ended.canceled) exit.canceled += 1;
     exit.refunded += ended.refunded;
     exit.refundFailed ||= ended.refundFailed;
   }
   for (const customer of customers) {
     try {
-      await deleteCustomer(stripe, customer);
+      await deleteCustomer(deletion, customer);
     } catch (err) {
       log(`stripe: customer ${customer} of deleted account ${accountId} was not deleted; delete it by hand: ${(err as Error).message}`);
     }
