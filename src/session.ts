@@ -1,11 +1,16 @@
 /**
  * The browser session: a signed cookie naming the account, good for 30 days.
  *
- * The cookie holds nothing but the account id and when it was issued, signed
- * with SESSION_SECRET. It is host-only: no Domain attribute, ever, so it is
- * sent to PUBLIC_URL's host and to no other, including a panel host on a
- * subdomain (panel-host.ts). Nothing is stored server-side per session, so signing
- * out everywhere is a matter of rotating the secret.
+ * The cookie holds the account id, when it was issued, and the account's
+ * session_version at that moment, signed with SESSION_SECRET. It is
+ * host-only: no Domain attribute, ever, so it is sent to PUBLIC_URL's host and
+ * to no other, including a panel host on a subdomain (panel-host.ts).
+ *
+ * Nothing is stored per session. Instead every request compares the cookie's
+ * version with the account row it loads anyway (sessionMiddleware), so
+ * bumping the account's session_version signs out every browser at once with
+ * no extra query. "Sign out every Mac" does that (revokeEverything in db.ts).
+ * A cookie from before versions existed has no "v" and counts as 0.
  */
 
 import type { Context, MiddlewareHandler } from "hono";
@@ -38,7 +43,7 @@ export function hostCookieName(env: { PUBLIC_URL: string }, name: string): strin
 }
 export const SESSION_DAYS = 30;
 
-type SessionData = { a: string; t: number };
+type SessionData = { a: string; t: number; v?: number };
 
 /**
  * SESSION_SECRET, or a refusal to go on without one.
@@ -55,8 +60,17 @@ export function sessionSecret(c: Context<AppEnv>): string {
   return secret;
 }
 
-export async function setSession(c: Context<AppEnv>, accountId: string): Promise<void> {
-  const data: SessionData = { a: accountId, t: Date.now() };
+/**
+ * Sign the browser in as `account`. `issuedAt` is for re-issuing a cookie
+ * under a new version without giving it a fresh sign-in time: signedInAt
+ * proves a person was at Google's chooser, and only a sign-in may renew that.
+ */
+export async function setSession(
+  c: Context<AppEnv>,
+  account: { id: string; session_version: number },
+  issuedAt: number = Date.now(),
+): Promise<void> {
+  const data: SessionData = { a: account.id, t: issuedAt, v: account.session_version ?? 0 };
   await setSignedCookie(c, hostCookieName(c.env, SESSION_COOKIE), JSON.stringify(data), sessionSecret(c), {
     path: "/",
     httpOnly: true,
@@ -93,6 +107,7 @@ async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   try {
     const data = JSON.parse(raw) as SessionData;
     if (typeof data.a !== "string" || typeof data.t !== "number") return null;
+    if (data.v !== undefined && !(Number.isInteger(data.v) && data.v >= 0)) return null;
     if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return null;
     return data;
   } catch {
@@ -100,9 +115,9 @@ async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   }
 }
 
-/** The account id a valid, unexpired session cookie names, or "". */
-export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
-  return (await readSession(c))?.a ?? "";
+/** Whether a cookie's contents still stand for this account: same id, and not issued before a bump. */
+function currentFor(data: SessionData, account: { id: string; session_version: number }): boolean {
+  return data.a === account.id && (data.v ?? 0) === (account.session_version ?? 0);
 }
 
 /**
@@ -112,9 +127,15 @@ export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
  * goes through Google's account chooser (prompt=select_account in
  * google.ts), which a person has to click. So a recent value means a person
  * was at Google a moment ago, which no script on this origin can arrange.
+ *
+ * 0 too when the cookie is not the one sessionMiddleware accepted for the
+ * signed-in account (an old version, or no account), so a caller never has to
+ * remember to check both.
  */
 export async function sessionSignedInAt(c: Context<AppEnv>): Promise<number> {
-  return (await readSession(c))?.t ?? 0;
+  const account = c.get("account");
+  const data = await readSession(c);
+  return data && account && c.get("authKind") === "session" && currentFor(data, account) ? data.t : 0;
 }
 
 /**
@@ -135,10 +156,12 @@ export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   expireLegacyCookies(c);
   if (c.get("account") === undefined) c.set("account", null);
   if (c.get("device") === undefined) c.set("device", null);
-  const id = await sessionAccountId(c);
-  if (id) {
-    const account = await accountById(c.env.DB, id);
-    if (account) {
+  const data = await readSession(c);
+  if (data) {
+    const account = await accountById(c.env.DB, data.a);
+    // The account row is loaded anyway; its session_version is the whole
+    // cost of being able to revoke a cookie.
+    if (account && currentFor(data, account)) {
       c.set("account", account);
       c.set("authKind", "session");
     }
