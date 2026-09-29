@@ -204,20 +204,21 @@ a leak that already happened:
   token lets its holder mint Drive access tokens for the files Syllabus created
   in that person's Drive, which is where the lecture summaries and transcripts
   live. Rotate first, so the live table stops being readable with the leaked
-  key, and then end the grants at Google. **The code cannot do the second part
-  in bulk.** `revokeGrantAtGoogle` (`src/drive.ts`, a `POST` to
+  key, and then end the grants at Google. **Ending the grants in bulk is done by
+  `scripts/bulk-revoke.mjs`; see [bulk-revoke.md](bulk-revoke.md).** It exists
+  because `revokeGrantAtGoogle` (`src/drive.ts`, a `POST` to
   `https://oauth2.googleapis.com/revoke`) is reached only from a person's own
-  Disconnect and from account deletion, and there is no operator route or
-  script. The options, in order of cost:
+  Disconnect and from account deletion, and the Worker has no operator route
+  for it (on purpose). The options, in order of cost:
   1. **Each person disconnects** from the account page, or removes Syllabus
      at `myaccount.google.com/permissions`. Slow, and needs telling everyone
      why. Fine for a few accounts.
-  2. **An operator script.** Read `refresh_token_enc` for every row, open each
+  2. **The operator script, `scripts/bulk-revoke.mjs`
+     ([bulk-revoke.md](bulk-revoke.md)).** It does what follows and more (device
+     tokens and browser sessions too). Read `refresh_token_enc` for every row, open each
      with the old key (`unseal` in `src/drive-keys.ts`), and POST each
-     plain token to Google's revoke endpoint, then delete the row. It is about
-     thirty lines built from `unseal` and `revokeGrantAtGoogle`, and it is not
-     in the repo. **Write and test it before launch, not during an incident.**
-     It has to be run by someone who still holds the leaked key, which is why
+     plain token to Google's revoke endpoint, then delete the row. **Rehearse its dry run before launch, not during an
+     incident.** It has to be run by someone who still holds the leaked key, which is why
      you keep the key until it is done.
   3. **Delete the OAuth Web client** in Google Cloud project
      `friendly-bazaar-507320-b7`, which stops the tokens issued to it (confirm

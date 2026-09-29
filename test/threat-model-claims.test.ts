@@ -127,12 +127,12 @@ function m4aClaiming(claimedSeconds: number, bytes: number): Uint8Array {
 
 describe("the transcription meter (threat model F-01)", () => {
   // The header is written by the caller, so "what the file says" is what the
-  // caller says. A 12 MiB upload whose mvhd claims one second is charged one
-  // second today, whatever audio it really holds (a low bitrate stream packs
+  // caller says. A 12 MiB upload whose mvhd claims one second used to be charged
+  // one second, whatever audio it really holds (a low bitrate stream packs
   // hours into 12 MiB). This test states the behavior the fix should give and
-  // is marked .fails so the suite stays green until the fix lands; when it
-  // does, vitest reports this as a failure and the marker comes off.
-  it.fails("does not charge one second for twelve megabytes of audio", async () => {
+  // was marked .fails until the byte floor landed (PR #51); it now runs as an
+  // ordinary test.
+  it("does not charge one second for twelve megabytes of audio", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("the transcript", { status: 200 })));
     const { token } = await claimDevice("meter-liar@example.com");
     const bytes = 12 * 1024 * 1024 - 1024;

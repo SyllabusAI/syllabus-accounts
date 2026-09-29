@@ -37,25 +37,38 @@ will not.
 
 | ID | Severity | Finding | Blocks launch |
 |---|---|---|---|
-| F-01 | **High** | The transcription meter trusts a length the caller writes, so 12 MiB of audio can be charged as one second | **Yes** |
+| F-01 | **High** | The transcription meter trusts a length the caller writes, so 12 MiB of audio can be charged as one second | No: fixed by PR #51 |
 | F-02 | **High** as deployed | `PANEL_ORIGIN` is empty in `wrangler.jsonc`, so a relayed panel runs on the account origin and a stolen device token becomes script on the account pages | **Yes**, until set or accepted |
-| F-03 | Medium | Browser sessions cannot be revoked; "sign out every Mac" leaves every browser signed in for up to 30 days | No |
+| F-03 | Medium | Browser sessions cannot be revoked; "sign out every Mac" leaves every browser signed in for up to 30 days | No: fixed by PR #48 and PR #55 |
 | F-04 | Medium | Device-code phishing: a link with the code prefilled and an attacker-chosen Mac name enrolls the attacker's Mac into a victim's account | No |
 | F-05 | Medium | A browser session is remote control of the Mac's panel (start the mic, change setup), and a hijacked relay sees what the owner types | No |
 | F-06 | Medium | Account deletion refunds unused time with no regard for use, so an allowance can be spent and the money taken back | No |
 | F-07 | Medium | The deploy path is open to anyone with write access: unprotected `production` environment, no required reviews, secret scanning off | No |
-| F-08 | Medium | The DRIVE_KEY runbook cannot execute its "key and database both leaked" branch as written | No |
-| F-09 | Low | Prompt injection through transcript text can alter summaries, action items and study answers (integrity only) | No |
+| F-08 | Medium | The DRIVE_KEY runbook cannot execute its "key and database both leaked" branch as written | No: tool built in PR #54 |
+| F-09 | Low | Prompt injection through transcript text can alter summaries, action items and study answers (integrity only) | No: fixed by PR #53 and LectureAI PR #101 |
 | F-10 | Low | Trial farming with many Google accounts; the 100% off code is a bearer secret | No |
 | F-11 | Low | The Drive consent flow is not bound to the account that started it | No |
 | F-12 | Low | Rotating `SESSION_SECRET` silently disables the repeat-trial block | No |
 | F-13 | Low | `DRIVE_KEY` is hashed, not stretched, and its strength is not checked | No |
-| F-14 | Low | The assistant caches plaintext summaries and transcripts on the Mac, against what its own docstring says | No |
+| F-14 | Low | The assistant caches plaintext summaries and transcripts on the Mac, against what its own docstring says | No: fixed by LectureAI PR #102 |
 | F-15 | Low | A relayed panel can send a `Location` header, and relayed pages carry no CSP | No |
 | F-16 | Low | A stalled assistant stream can outlive its 900 second reservation | No |
 | F-17 | Low | A device code lives 15 minutes; ASVS 2.7.2 says 10 | No |
 | F-18 | Low | Per-address limits let one script lock a shared address out of sign-in | No |
 | F-19 | Low | GitHub Actions are pinned by tag, not by commit | No |
+
+### Status after the 0.6.0 security PRs landed
+
+| ID | Status | Where it is shown |
+|---|---|---|
+| F-01 | Fixed by PR #51: the meter charges at least one second per 24000 bytes up front and settles up to the provider's own duration | `test/meter-floor.test.ts`, `test/threat-model-claims.test.ts` |
+| F-03 | Fixed by PR #48 (`__Host-` cookie names) and PR #55 (`session_version`, migration 0017): "Sign out every Mac" now ends every browser session | `test/session-cookie.test.ts`, `test/session-version.test.ts` |
+| F-08 | Fixed by PR #54: `scripts/bulk-revoke.mjs`, described in [bulk-revoke.md](bulk-revoke.md) and linked from [drive-key-rotation.md](drive-key-rotation.md). Rehearse the dry run against production before it is needed | `test/bulk-revoke.test.ts` |
+| F-09 | Fixed by PR #53 here and LectureAI PR #101, which must stay in step (the prompt parity check) | `test/untrusted-transcript.test.ts` |
+| F-14 | Fixed by LectureAI PR #102: the assistant keeps fetched lecture text in memory only and clears it on sign-out | LectureAI `test_assistant.py` |
+
+The sections below are the review as written on 2026-09-29 and are kept as
+the record of what was found.
 | F-20 | Low | JSON answers carry no `Cache-Control: no-store`, only HTML does | No |
 
 Two launch blockers, and both have a small fix. Everything else is in the
@@ -108,13 +121,13 @@ can leak.
   (`src/proxy.ts:140`), and a monthly ceiling covers every account together
   (`src/proxy.ts:160`, held in the same statement:
   `test/spend-limits.test.ts` "the ceiling across every account",
-  PR #43). **This bound has a hole: see F-01.**
+  PR #43). **This bound had a hole (F-01), closed by PR #51.**
 - The Drive refresh token never reaches the token holder, only an access
   token that lasts an hour and is limited to `drive.file`.
 
 **Residual risk.**
 - Until it is revoked or idle for 90 days, a copied token can spend the whole
-  allowance. With F-01 unfixed it can spend far more than the allowance.
+  allowance. Before PR #51 (F-01) it could spend far more than the allowance.
 - A thief can read the person's schedule and mint Drive tokens for files
   Syllabus created (lecture summaries and transcripts). That is a
   confidentiality loss that revocation only stops going forward.
@@ -278,9 +291,9 @@ token; a prompt injected into a transcript.
   m4a holds hours, and `mvhd` can say one second. The existing tests all use
   a truthful header (`test/proxy.test.ts:165-215`), so none catches it.
   **Proved:** `test/threat-model-claims.test.ts` uploads 12 MiB with a header
-  of one second and it is charged one second (the test is `it.fails`, holding
-  the desired behavior; it turns red when the fix lands, which is the cue to
-  remove the marker).
+  of one second and it is charged one second (the test held the desired
+  behavior as `it.fails` until PR #51 landed; the marker is now removed and
+  the test passes).
   What it costs: the provider bills the true duration. Groq is about $0.111 an
   hour, OpenAI $0.18. At the per-account limit of 20 requests a minute
   (`src/proxy.ts:140`) a single account with hour-long audio in each request
@@ -421,7 +434,7 @@ tampering with the redirect target.
   attaches the grant to the wrong account. Fix: put the account id in the flow
   and refuse if it differs; decide whether a different Google identity is
   allowed.
-- **F-03 (Medium). Cookie hardening.** Cookie names lack the `__Host-` prefix.
+- **F-03 (Medium). Cookie hardening.** Cookie names lacked the `__Host-` prefix (fixed by PR #48).
   Without it a sibling host can plant a lone session cookie (CSRF-audit
   finding 2). Renaming signs everyone out once. See F-03 in the triage.
 - The state comparison is not constant time (`:161`). Not exploitable (the
@@ -501,7 +514,7 @@ Sous profile, a client on a call. Also whoever edits a filed summary in Drive.
   after them (`src/assistant.ts:478-481`).
 
 **Residual risk.**
-- **F-09 (Low; integrity only).** Neither summarize prompt nor the assistant
+- **F-09 (Low; integrity only). Fixed by PR #53 and LectureAI PR #101.** Neither summarize prompt nor the assistant
   prompt says that the transcript is untrusted data whose instructions are to
   be ignored (`src/prompts.ts:30-57`, `src/assistant.ts:120-126`, and their
   LectureAI copies; the parity check in `.github/workflows/prompt_parity.py`
@@ -517,7 +530,7 @@ Sous profile, a client on a call. Also whoever edits a filed summary in Drive.
 - Markdown in `summary_md`, key terms and `detail` is written to the Drive
   file unescaped (`intake/summarize.py:387-419`). Drive renders it as text or
   a Doc; it becomes a risk only if a future surface renders it as HTML.
-- **F-14 (Low). Local cache.** `intake/assistant.py:189-210` writes every
+- **F-14 (Low). Local cache. Fixed by LectureAI PR #102.** `intake/assistant.py:189-210` writes every
   summary and every fetched transcript to `~/.intake/.assistant/` as
   plaintext and never expires it. The module docstring says "everything the
   assistant can draw on lives in Drive and nowhere on this Mac", and the
@@ -647,24 +660,24 @@ taking it back; a forger of Stripe events; anyone with free accounts.
 
 ## Triage of every Medium
 
-Blocking items are F-01 and F-02. Each Medium below has a decision.
+Blocking items were F-01 (fixed by PR #51) and F-02. Each Medium below has a decision.
 
 | ID | Decision | Why | Proposed fix | Owner |
 |---|---|---|---|---|
-| F-03 sessions cannot be revoked; no `__Host-` prefix | **Fix before launch if time allows; else accept** | A copied cookie is good for 30 days. "Sign out every Mac" gives the impression of a full reset and is not one. Needs a stolen cookie (malware or an XSS), so it stacks on other failures | Add `token_version` to the session cookie (`{a,t,v}`) and compare in `sessionMiddleware`; old cookies without `v` count as 0. Then "sign out everywhere" really is. Do the `__Host-` rename in the same change, since both sign everyone out once | Liam |
+| F-03 sessions cannot be revoked; no `__Host-` prefix | **Done: `__Host-` rename in PR #48, `session_version` in PR #55** (was: fix before launch if time allows; else accept) | A copied cookie is good for 30 days. "Sign out every Mac" gives the impression of a full reset and is not one. Needs a stolen cookie (malware or an XSS), so it stacks on other failures | Add `token_version` to the session cookie (`{a,t,v}`) and compare in `sessionMiddleware`; old cookies without `v` count as 0. Then "sign out everywhere" really is. Do the `__Host-` rename in the same change, since both sign everyone out once | Liam |
 | F-04 device-code phishing | **Accept for 0.6.0, fix soon** | The code is typed or pasted by the victim, the page names the Mac, and approval is rate limited. But `verification_uri_complete` prefills the code and the name is attacker text, so a single click enrolls an attacker's Mac | Drop the prefill on the approval page or require typing it; show "Only continue if you started this on your Mac right now" and the requesting address's country; consider an email when a Mac is added | Liam |
 | F-05 session is remote control; hijacked relay sees what the owner types | **Accept (by design)** | The relayed panel is the product. Compensated by F-02's fix and the Mac-side viewer check | Set `PANEL_ORIGIN` (F-02); consider a second confirmation for `/api/record/start` over the relay and never asking for API keys on a relayed Setup page | Liam and Trace |
 | F-06 refund ignores use | **Decide before the first paid month ends** | It costs money only after real money is taken, not at launch | Refund by use: subtract provider cost of the used share, or refund only when less than some fraction of the allowance is used | Liam, lawyer |
 | F-07 deploy path | **Fix before launch (settings, no code)** | Anyone with write access can dispatch Deploy from a branch: the `production` environment has no protection rules and no branch policy. Branch protection requires the two checks but not reviews. Secret scanning and push protection are off on a public repo. Actions are pinned by tag (F-19) | Give `production` a deployment branch policy of `main` and a required reviewer; turn on secret scanning with push protection and Dependabot alerts; require one review on `main`, or accept that two owners can merge their own PRs; pin actions by SHA | Liam |
-| F-08 DRIVE_KEY runbook gap | **Fix the doc now (done here); build the tool only if the branch is ever needed** | The "key and database both leaked" branch tells the operator to revoke every grant at Google, and no code path does that in bulk | See [drive-key-rotation.md](drive-key-rotation.md): the honest options are written down | Liam |
+| F-08 DRIVE_KEY runbook gap | **Done: doc fixed here, tool built in PR #54** (was: build the tool only if the branch is ever needed) | The "key and database both leaked" branch tells the operator to revoke every grant at Google, and no code path does that in bulk | See [drive-key-rotation.md](drive-key-rotation.md) and [bulk-revoke.md](bulk-revoke.md) | Liam |
 
 ## Decisions needed from Liam
 
-1. **F-01:** ship the floor (`bytes / 24000`) as a same-day patch, then the
+1. **F-01 (done, PR #51):** ship the floor (`bytes / 24000`) as a same-day patch, then the
    provider-reported settle? Or hold launch until the settle is done?
 2. **F-02:** set `PANEL_ORIGIN` before 0.6.0 (needs a second domain and a
    Cloudflare custom domain), or accept the risk in writing?
-3. **F-03:** do the session-version change and the `__Host-` rename now, in one
+3. **F-03 (done, PR #48 and PR #55):** do the session-version change and the `__Host-` rename now, in one
    sign-out-everyone deploy?
 4. **F-06:** refund policy for deleted accounts that used their allowance.
 5. **F-07:** turn on the GitHub settings above. They are dashboard clicks.
@@ -673,13 +686,16 @@ Blocking items are F-01 and F-02. Each Medium below has a decision.
 
 | Claim | Where it is shown |
 |---|---|
-| Rate limits on open and semi-open routes | `src/limits.ts`, `test/security.test.ts` "rate limits on the routes that answer strangers", `test/attacks.test.ts`; full table in `docs/rate-limits.md` (PR #47, not on `main` yet) |
+| Rate limits on open and semi-open routes | `src/limits.ts`, `test/security.test.ts` "rate limits on the routes that answer strangers", `test/attacks.test.ts`; full table in `docs/rate-limits.md` (PR #47) |
 | Cross-account isolation | `test/isolation.test.ts` (PR #42) |
 | Concurrent spend and the global ceiling | `test/spend-limits.test.ts` (PR #43), `test/proxy.test.ts` |
-| Stripe webhook behavior | `test/stripe.test.ts`; PR #46 adds `test/stripe-webhook.test.ts` |
-| CSRF verdict per route | `liam/csrf-audit` (`test/csrf.test.ts`, section "CSRF audit" appended to `threat-model.md`) |
+| Stripe webhook behavior | `test/stripe.test.ts`; `test/stripe-webhook.test.ts` (PR #46) |
+| CSRF verdict per route | PR #48 (`test/csrf.test.ts`, section "CSRF audit" appended to `threat-model.md`) |
 | Panel host, tickets, cookies | `test/panel-host.test.ts` (PR #41) |
 | Token expiry and revocation | `test/expiry.test.ts`, `test/devices.test.ts` |
 | Drive key rotation and its runbook | `test/security.test.ts` "rotating DRIVE_KEY", `test/threat-model-claims.test.ts` "the DRIVE_KEY runbook" |
-| F-01 | `test/threat-model-claims.test.ts` "the transcription meter" (`it.fails`) |
+| F-01 | `test/meter-floor.test.ts`, `test/threat-model-claims.test.ts` "the transcription meter" |
+| F-03 | `test/session-version.test.ts`, `test/session-cookie.test.ts` |
+| F-08 | `test/bulk-revoke.test.ts`, [bulk-revoke.md](bulk-revoke.md) |
+| F-09 | `test/untrusted-transcript.test.ts` |
 | Dependencies | `npm audit` reported 0 vulnerabilities on 2026-09-29 (registry query only) |
