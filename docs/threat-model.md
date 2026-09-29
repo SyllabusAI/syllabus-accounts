@@ -137,7 +137,8 @@ useless without the database; see [drive-key-rotation.md](drive-key-rotation.md)
 for rotating it, and for what to do when both leak.
 
 **8. Denial of service and cost amplification.**
-Open routes are rate limited per address; the device-code table has a global
+Every route and the limit that covers it are listed in
+[rate-limits.md](rate-limits.md). Open routes are rate limited per address; the device-code table has a global
 cap; bodies are capped before they are read; the proxy has per-account and
 global ceilings. Cloudflare absorbs volumetric floods in front of all of it.
 
