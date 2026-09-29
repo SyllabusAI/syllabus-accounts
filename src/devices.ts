@@ -17,7 +17,7 @@ import * as db from "./db";
 import type { AppEnv } from "./env";
 import { clientAddress as source, LIMITS, limitedPage, overLimit } from "./limits";
 import { approvedPage, devicePage } from "./pages";
-import { browserOnly, sameOrigin } from "./session";
+import { browserOnly, sameOrigin, sessionSignedInAt, setSession } from "./session";
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
 import { log } from "./log";
 
@@ -245,7 +245,12 @@ devices.post("/devices/revoke-all", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login");
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
-  const removed = await db.revokeEverything(c.env.DB, account.id);
+  const signedInAt = await sessionSignedInAt(c); // before the bump, which makes this cookie stale
+  const { removed, sessionVersion } = await db.revokeEverything(c.env.DB, account.id);
+  // Every browser is signed out too, this one included unless it is handed a
+  // cookie under the new version. It keeps its original sign-in time, so this
+  // does not count as the recent sign-in that deleting an account asks for.
+  await setSession(c, { id: account.id, session_version: sessionVersion }, signedInAt || Date.now());
   log(`account ${account.id} signed out every Mac (${removed})`);
   return c.redirect("/");
 });
