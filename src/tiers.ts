@@ -164,7 +164,7 @@ const ENTITLING_STATUSES = new Set(["active", "trialing", "past_due"]);
  * cutting somebody off; past it, we stop trusting a row nothing has confirmed
  * in three days.
  */
-const PERIOD_END_GRACE_MS = 3 * 24 * 3600 * 1000;
+export const PERIOD_END_GRACE_MS = 3 * 24 * 3600 * 1000;
 
 /**
  * Which price id is which tier, from the Worker's vars.

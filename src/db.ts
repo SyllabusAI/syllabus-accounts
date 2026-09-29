@@ -702,7 +702,8 @@ export async function putSubscription(
        ON CONFLICT (stripe_subscription_id) DO UPDATE SET account_id = excluded.account_id,
          stripe_customer_id = excluded.stripe_customer_id, price_id = excluded.price_id, tier = excluded.tier,
          status = excluded.status, current_period_end = excluded.current_period_end,
-         cancel_at_period_end = excluded.cancel_at_period_end, updated_at = excluded.updated_at`,
+         cancel_at_period_end = excluded.cancel_at_period_end, updated_at = excluded.updated_at
+       WHERE subscriptions.status NOT IN ('canceled', 'incomplete_expired')`,
     )
     .bind(
       sub.stripe_subscription_id,
@@ -717,6 +718,33 @@ export async function putSubscription(
       ts,
     )
     .run();
+}
+
+/**
+ * Accounts whose allowance row still says they are paid while one of their
+ * subscriptions ended, by its own period, before `cutoff` (ISO 8601, so string
+ * order is time order). Rows from a source in `keep` are never returned, nor
+ * are ones already lapsed or trial_used. The caller decides whether the row
+ * really is wrong; this only finds where to look.
+ */
+export async function accountsPastPeriodEnd(
+  db: D1Database,
+  cutoff: string,
+  keep: string[],
+  limit: number,
+): Promise<string[]> {
+  const skip = [...new Set([...keep, "lapsed", "trial_used"])];
+  const res = await db
+    .prepare(
+      `SELECT DISTINCT a.account_id FROM allowances a
+       JOIN subscriptions s ON s.account_id = a.account_id
+       WHERE a.source NOT IN (${skip.map(() => "?").join(", ")})
+         AND s.current_period_end != '' AND s.current_period_end < ?
+       ORDER BY a.updated_at LIMIT ?`,
+    )
+    .bind(...skip, cutoff, limit)
+    .all<{ account_id: string }>();
+  return res.results.map((r) => r.account_id);
 }
 
 /**
