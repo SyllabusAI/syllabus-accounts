@@ -43,36 +43,70 @@ export function landing(): string {
   );
 }
 
+/** Where a person writes to us about their account, their data, or these pages. */
+const CONTACT = `<a href="mailto:syllabus@maincoursemedia.com">syllabus@maincoursemedia.com</a>`;
+
 export function privacyPage(): string {
   return page(
     "Privacy",
-    `<p class="muted">Last updated September 26, 2026.</p>
-     <p>Syllabus is a personal lecture-recording tool. The recording, transcription, and summarizing all happen on
-        the Mac that runs it. This account service exists so that a Mac can be tied to your identity and so your
-        settings and your Google Drive connection can follow you to another Mac.</p>
-     <h2>What this service stores</h2>
+    `<p class="muted">Last updated September 29, 2026.</p>
+     <p>Syllabus records your lectures on your Mac and turns them into transcripts and study notes in your own Google
+        Drive. It is made by Main Course Media LLC, a Texas company ("we"). This page says what reaches us, what we keep,
+        who else handles it, and how to get rid of it.</p>
+     <h2>What we keep</h2>
      <ul>
        <li><strong>Who you are.</strong> When you sign in with Google we keep your Google account id, email address, and
            display name.</li>
-       <li><strong>Your Macs.</strong> The name of each Mac you connect, when it connected, when it last checked in, and,
-           when it is published on the web, its address. Each Mac holds a token that identifies it; we keep only a hash
-           of that token.</li>
+       <li><strong>Your Macs.</strong> The name of each Mac you connect, when it connected, when it last checked in, and
+           its panel's address. Each Mac holds a token that identifies it; we keep only a hash of that token.</li>
        <li><strong>Your settings.</strong> The text of your class schedule, so it can follow you to another Mac.</li>
        <li><strong>Your Google Drive connection.</strong> If you connect Drive, the refresh token Google issues is stored
            encrypted and is used only to mint short-lived access tokens for your own Macs. The Macs never receive the
            refresh token. Syllabus asks only for the <code>drive.file</code> permission, which reaches files Syllabus
            itself created and nothing else in your Drive.</li>
+       <li><strong>Your plan and usage.</strong> Which plan you are on, its renewal date, and how much you have used this
+           month: hours of audio, the size of each summary, and how many study sessions you opened, with what each one
+           cost us. These are numbers. They do not include what was said or asked.</li>
+       <li><strong>Service logs.</strong> Our hosting keeps short-lived logs of requests and errors. They name an account
+           by its id, not by its name or email.</li>
      </ul>
-     <p>Recordings, transcripts, summaries, and API keys never come to this service. They live on your Mac and in your
-        own Google Drive.</p>
+     <h2>What passes through us and is not kept</h2>
+     <p>On a paid plan or the trial, Syllabus uses our accounts with the AI providers instead of keys of your own. So these
+        pass through this service on their way to a provider and back:</p>
+     <ul>
+       <li><strong>Lecture audio</strong>, in short pieces, sent for transcription.</li>
+       <li><strong>Transcripts</strong>, sent to be summarized.</li>
+       <li><strong>Summaries, transcripts, and your questions</strong>, when you use the study assistant.</li>
+       <li><strong>Your Mac's panel pages</strong>, when you open that panel from a browser at its web address.</li>
+     </ul>
+     <p>None of this is written to our database or our logs. It is handed on, the answer is handed back to your Mac, and
+        what stays here is the usage count above. Your recordings, transcripts, and notes are stored on your Mac and in
+        your Google Drive, not with us.</p>
+     <h2>Who else handles it</h2>
+     <table><tbody>
+       <tr><td><strong>Groq</strong></td><td>Transcribes lecture audio.</td></tr>
+       <tr><td><strong>OpenAI</strong></td><td>Transcribes lecture audio when Groq is unavailable.</td></tr>
+       <tr><td><strong>Anthropic</strong></td><td>Writes summaries and runs the study assistant.</td></tr>
+       <tr><td><strong>Stripe</strong></td><td>Takes payments and holds your card and billing details. We never see your
+           full card number.</td></tr>
+       <tr><td><strong>Google</strong></td><td>Signs you in, and stores your notes in your Drive if you connect it.</td></tr>
+       <tr><td><strong>Cloudflare</strong></td><td>Hosts this service and its database.</td></tr>
+     </tbody></table>
+     <p>We use each provider's paid business service, whose terms do not allow it to train its models on what we send.
+        We do not train any model on your recordings, transcripts, notes, or questions, and we do not let anyone else do
+        so.</p>
+     <p>If you use Syllabus with API keys of your own, your Mac talks to those providers directly and none of the above
+        passes through us.</p>
      <h2>How it is used</h2>
-     <p>Only to run Syllabus for you: signing you in, telling your Macs who they belong to, syncing your settings, and
-        letting your Macs file notes to your Drive. Nothing is sold, shared with advertisers, or used to build
-        profiles. Syllabus's use and transfer of information received from Google APIs adheres to the
+     <p>Only to run Syllabus for you: signing you in, telling your Macs who they belong to, syncing your settings, letting
+        your Macs file notes to your Drive, transcribing and summarizing your lectures, billing your plan, and keeping the
+        service working and secure. Nothing is sold, shared with advertisers, or used to build profiles. Syllabus's use
+        and transfer of information received from Google APIs adheres to the
         <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data
         Policy</a>, including the Limited Use requirements.</p>
      <h2>Where it lives</h2>
-     <p>On Cloudflare, in a database that belongs to this service. Traffic to and from it is encrypted.</p>
+     <p>On Cloudflare, in a database that belongs to this service. Traffic to and from it is
+        encrypted.</p>
      <h2>Your choices</h2>
      <ul>
        <li>Remove a Mac from your account page at any time; its token stops working at once.</li>
@@ -84,7 +118,16 @@ export function privacyPage(): string {
            only its own record of past payments. After a deletion we keep one thing: a one-way scrambled identifier
            made from your Google sign-in, used only to stop the free trial being given out twice. It cannot be turned
            back into your name or email, and nothing else is kept with it.</li>
+       <li>Ask us what we hold about you, or to correct it, by writing to ${CONTACT}.</li>
      </ul>
+     <h2>Age</h2>
+     <p>Syllabus is for people 18 and older. We do not knowingly keep an account for anyone younger, and we delete one when
+        we learn of it.</p>
+     <h2>Changes</h2>
+     <p>When this page changes in a way that matters, we update the date at the top and email account holders before the
+        change takes effect.</p>
+     <h2>Contact</h2>
+     <p>Main Course Media LLC, Texas. ${CONTACT}</p>
      <p>This service is open source; its code is at
         <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a>.</p>
      ${FOOTER}`,
@@ -92,19 +135,75 @@ export function privacyPage(): string {
 }
 
 export function termsPage(): string {
+  const plans = SELLABLE.map((t) => {
+    const tier = TIERS[t.tier as TierName];
+    return `<li>${h(t.label)} · $${tier.price_usd} a month for ${tier.audio_hours} hours of lecture audio${
+      tier.assistant_sessions ? `, plus ${tier.assistant_sessions} study assistant sessions` : ""
+    }</li>`;
+  }).join("");
   return page(
     "Terms",
-    `<p class="muted">Last updated September 13, 2026.</p>
-     <p>Syllabus and this account service are provided as they are, free of charge, for recording and studying your own
-        lectures. Use them only for recordings you are allowed to make, and follow your school's rules about
-        recording classes.</p>
-     <p>You are responsible for what you record and for the Google account and Drive you connect. We may remove an
-        account that abuses the service. The service may change or stop at any time; your recordings and notes stay in
-        your own Google Drive regardless.</p>
-     <p>There is no warranty of any kind, and the people behind Syllabus are not liable for any loss arising from its
-        use, to the extent the law allows.</p>
-     <p>Questions: open an issue at
-        <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a>.</p>
+    `<p class="muted">Last updated September 29, 2026.</p>
+     <p>These terms are an agreement between you and Main Course Media LLC, a Texas limited liability company ("we"),
+        for Syllabus, its Mac app, and this account service. By creating an account or using Syllabus you accept them.
+        If you do not accept them, do not use Syllabus.</p>
+     <h2>Who can use it</h2>
+     <p>You must be 18 or older and able to enter a binding agreement. One account is for one person.</p>
+     <h2>Your recordings are your responsibility</h2>
+     <p>Syllabus is for recording and studying lectures you attend. You may record only where you are allowed to. That
+        means following your school's rules, your instructor's wishes, and every law that applies to recording where you
+        are, including any that require everyone present to consent. Do not use Syllabus to record private
+        conversations, or to copy, share, or sell course material you have no right to.</p>
+     <p>You keep all rights to your recordings, transcripts, and notes. You give us only the permission needed to
+        transcribe and summarize them for you, as the <a href="/privacy">privacy page</a> describes.</p>
+     <p>You agree to defend and repay Main Course Media LLC for any claim, loss, or cost, including reasonable legal
+        fees, that comes from what you record or how you use Syllabus in breach of these terms.</p>
+     <h2>Plans, trial, and billing</h2>
+     <ul>${plans}</ul>
+     <ul>
+       <li><strong>Trial.</strong> Every plan starts with ${TRIAL_ALLOWANCE.audio_seconds / 3600} hours of lecture audio to
+           try it. We ask for a card at the start and do not charge it until those hours are used or the trial period
+           ends, whichever comes first. One trial per person.</li>
+       <li><strong>Automatic renewal.</strong> A plan renews every month and your card is charged the plan's price, plus
+           any sales tax, until you cancel. We will tell you by email before a price goes up, and a new price starts
+           only at your next renewal.</li>
+       <li><strong>Hours.</strong> A plan's hours are for its month and do not carry over. When they run out, recording
+           stops until the next month or until you add hours. You are never billed for going over.</li>
+       <li><strong>Extra hours.</strong> You can buy ${TOPUP.audio_hours} more hours for $${TOPUP.price_usd} as a one-time
+           payment. They are for the current month.</li>
+       <li><strong>Canceling.</strong> Cancel at any time under Manage billing on your account page. You keep your
+           plan's hours until the end of the month you have paid for, and you are not charged again. Canceling this way
+           does not refund the current month.</li>
+       <li><strong>Refunds.</strong> If you delete your account, we cancel your plan and refund the unused part of the
+           current month to your card. If you believe you were charged in error, write to ${CONTACT} and we will make it
+           right.</li>
+       <li><strong>Codes.</strong> A promotion code from us is personal, may end, and has no cash value.</li>
+     </ul>
+     <h2>Acceptable use</h2>
+     <p>Do not share your account, resell access, try to get around the limits on your plan, send anything to the
+        service other than lectures and your own study questions, or interfere with the service or other people's use of
+        it. We may suspend or close an account that does, and we will tell you why.</p>
+     <h2>AI output</h2>
+     <p>Transcripts, summaries, and study assistant answers are made by AI and can be wrong or incomplete. Check anything
+        important against the lecture and your course materials. Follow your school's rules on using AI in coursework.</p>
+     <h2>Changes to the service and these terms</h2>
+     <p>Syllabus may change, and features may be added or removed. If we change these terms in a way that matters, we
+        will email you before the change takes effect; using Syllabus after that means you accept the new terms. If we
+        stop offering Syllabus, we will give you at least 30 days' notice and refund any month you have paid for and
+        not received. Your recordings and notes stay on your Mac and in your Google Drive regardless.</p>
+     <h2>No warranty</h2>
+     <p>Syllabus is provided as it is and as available. To the extent the law allows, we make no warranty of any kind,
+        including that it will be accurate, uninterrupted, or fit for a particular purpose.</p>
+     <h2>Limits on liability</h2>
+     <p>To the extent the law allows, Main Course Media LLC is not liable for any indirect, incidental, or consequential
+        loss, lost data, or lost grades arising from Syllabus. Our total liability for any claim is limited to what you
+        paid us in the 12 months before it arose.</p>
+     <h2>Law</h2>
+     <p>These terms are governed by the laws of the State of Texas, without regard to its conflict of law rules. Any
+        dispute belongs in the state or federal courts located in Texas, and you and we both agree to their
+        jurisdiction.</p>
+     <h2>Contact</h2>
+     <p>Main Course Media LLC, Texas. ${CONTACT}</p>
      ${FOOTER}`,
   );
 }

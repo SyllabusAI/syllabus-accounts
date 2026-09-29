@@ -132,6 +132,23 @@ describe("the sign-in routes", () => {
     expect(await (await get("/")).text()).toContain('href="/privacy"');
   });
 
+  it("says what really passes through the service, and who the terms are with", async () => {
+    const privacy = await (await get("/privacy")).text();
+    // Audio and transcripts have gone through the proxy since managed keys
+    // shipped, so the page may not say they never reach this service.
+    expect(privacy).not.toContain("never come to this service");
+    for (const provider of ["Groq", "OpenAI", "Anthropic", "Stripe"]) expect(privacy).toContain(provider);
+    expect(privacy).toContain("train");
+
+    const terms = await (await get("/terms")).text();
+    expect(terms).not.toContain("free of charge");
+    for (const phrase of ["Main Course Media LLC", "State of Texas", "18 or older", "renews every month"]) {
+      expect(terms).toContain(phrase);
+    }
+    // The prices on the terms are the ones Checkout sells, not a second copy.
+    expect(terms).toContain("$25 a month for 45 hours");
+  });
+
   it("signs out", async () => {
     const { cookie } = await signedInAs("me@example.com");
     const res = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-origin" });
