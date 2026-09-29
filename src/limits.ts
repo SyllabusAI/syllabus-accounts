@@ -11,7 +11,8 @@
  *
  * The limits that already existed before this file stay where they were:
  * /device/start and /device/poll in devices.ts, and the per-account proxy
- * limits in proxy.ts. /device/poll in particular answers `slow_down`, never
+ * limits in proxy.ts and assistant.ts. docs/rate-limits.md lists every route
+ * and which limit covers it; add a route there when you add one here. /device/poll in particular answers `slow_down`, never
  * 429, because RFC 8628 says so and the panel abandons a claim on anything
  * else.
  */
@@ -82,6 +83,51 @@ export const LIMITS = {
   stripeWebhook: { limit: 300, window: 60 },
   /** The three /billing routes, per account. Each one calls Stripe's API. */
   billing: { limit: 20, window: 600 },
+  /**
+   * A bearer that names no live device token, per source. Only FAILURES count,
+   * so a real panel is never near it; it stops a script from making the
+   * service do a database lookup per guess. Sized for a lecture hall of Macs
+   * whose tokens were all revoked at once ("sign out every Mac"), each
+   * retrying a few times before it gives up.
+   */
+  badToken: { limit: 600, window: 600 },
+  /**
+   * Every request carrying a device token, per device, whatever the route.
+   * The floor under the specific limits below and the per-account proxy
+   * limits: a panel does a handful of calls a minute, so this only stops a
+   * stolen token or a stuck loop from hammering D1.
+   */
+  deviceRequests: { limit: 600, window: 60 },
+  /**
+   * Every request carrying a session cookie, per account, on routes other
+   * than the relayed panel (relayView has its own). A person clicking around
+   * their account page is a few requests a minute.
+   */
+  sessionRequests: { limit: 1200, window: 600 },
+  /**
+   * GET /relay/connect, per device. Opening the panel's socket wakes a
+   * Durable Object; a panel reconnects with backoff after a drop, so a
+   * device that connects this often is looping.
+   */
+  relayConnect: { limit: 120, window: 600 },
+  /**
+   * Requests relayed to a panel (/p/<device>/...), per account, on both hosts
+   * (one bucket). Each one crosses a WebSocket to somebody's Mac, and a panel
+   * page polls, so this is generous: two requests a second sustained.
+   */
+  relayView: { limit: 1200, window: 600 },
+  /** POST /drive/token, per account. Each one is a call to Google; a panel caches the token for an hour. */
+  driveToken: { limit: 60, window: 600 },
+  /** PUT /settings/:name, per account. A database write per call. */
+  settingsWrite: { limit: 120, window: 600 },
+  /** POST /account/delete, per account. Each attempt calls Stripe before it touches a row. */
+  accountDelete: { limit: 5, window: 600 },
+  /**
+   * GET /p/<device>/_auth on the panel host (the ticket exchange), per
+   * source. Reached with a link the account host just minted, so a real
+   * person hits it once per panel opening; sized for a class.
+   */
+  panelTicket: { limit: 600, window: 600 },
 } as const satisfies Record<string, Limit>;
 
 /**

@@ -25,10 +25,11 @@ import { assistant } from "./assistant";
 import { panelUrl, relay, relayState } from "./relay";
 import { billing, billingView } from "./billing";
 import { settings } from "./settings";
-import { stripeHooks } from "./stripe";
+import { reconcileAllowances, stripeHooks } from "./stripe";
 import { drive } from "./drive";
 import { sweepDriveGrants } from "./drive-keys";
 import { bodyCap, securityHeaders } from "./headers";
+import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
 import { crossSiteGuard, sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
 import { log } from "./log";
@@ -57,7 +58,13 @@ app.use("*", async (c, next) => {
   if (auth.startsWith("Bearer " + DEVICE_TOKEN_PREFIX)) {
     const tokenHash = await sha256Hex(auth.slice(7));
     const found = await db.resolveDeviceToken(c.env.DB, tokenHash);
-    if (!found) return c.json({ error: "invalid_token" }, 401);
+    if (!found) {
+      // Counted per source, failures only: a guess costs a database lookup,
+      // and 2^256 tokens are not guessable, but the lookups are not free.
+      const wait = await overLimit(c, `bad-token:${clientAddress(c)}`, LIMITS.badToken);
+      if (wait !== null) return limitedJson(c, LIMITS.badToken, wait);
+      return c.json({ error: "invalid_token" }, 401);
+    }
     // Every bearer route passes through here, so this one check covers /me,
     // /settings, /drive/token, /proxy/*, /relay/connect and /device/revoke.
     // Same status and error as any dead token, because the panel already
@@ -90,6 +97,24 @@ app.use("*", async (c, next) => {
 // After the auth middleware, which is what says whether a cookie signed this
 // request in; before every route, so none can forget to check (session.ts).
 app.use("*", crossSiteGuard);
+
+// The floor under every signed-in route: one counter per device (a panel's
+// bearer) or per account (a browser's cookie), whatever the route, so a route
+// added later is limited before anyone remembers to give it a limit of its
+// own. /p/ is left to relayView, which is sized for a polling page.
+app.use("*", async (c, next) => {
+  const account = c.get("account");
+  if (!account) return next();
+  const device = c.get("device");
+  if (device) {
+    const wait = await overLimit(c, `device-req:${device.id}`, LIMITS.deviceRequests);
+    if (wait !== null) return limitedJson(c, LIMITS.deviceRequests, wait);
+  } else if (!c.req.path.startsWith("/p/")) {
+    const wait = await overLimit(c, `session-req:${account.id}`, LIMITS.sessionRequests);
+    if (wait !== null) return limitedJson(c, LIMITS.sessionRequests, wait);
+  }
+  return next();
+});
 
 app.get("/healthz", (c) => c.json({ ok: true }));
 app.get("/privacy", (c) => c.html(privacyPage()));
@@ -158,8 +183,9 @@ app.onError((err, c) => {
  * Seals any Drive grant not under the current DRIVE_KEY again under it, which
  * is what lets DRIVE_KEY_PREVIOUS be deleted after a rotation
  * (docs/drive-key-rotation.md), and clears rate-limit windows that closed
- * long ago. Both are bounded and idempotent, so a missed or doubled run
- * changes nothing.
+ * long ago. A separate task ends the allowance of a subscription whose
+ * cancellation Stripe never delivered (reconcileAllowances in stripe.ts). All
+ * are bounded and idempotent, so a missed or doubled run changes nothing.
  */
 export async function scheduled(_event: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(
@@ -174,6 +200,8 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
       await db.sweepRateLimits(env.DB, Math.floor(Date.now() / 1000) - 3600);
     })(),
   );
+  // Its own task, so a failure in the sweeps above cannot starve it (or the reverse).
+  ctx.waitUntil(reconcileAllowances(env.DB).catch((err) => log(`stripe: reconcile failed, ${(err as Error).message}`)));
 }
 
 /**

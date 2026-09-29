@@ -126,6 +126,10 @@ const MAX_LABEL_CHARS = 120;
  * duration is only ever used to charge MORE, never less, so overstating costs
  * the caller and understating buys nothing.
  *
+ * The header is written by the caller too, so it is not evidence on its own:
+ * the charge is never less than the byte-count floor below, and it is settled
+ * up to the provider's own measurement when that is larger.
+ *
  * A byte count is no substitute for reading the header: seconds per byte
  * depend on the bitrate the caller picked, so the same 12MB is eight minutes
  * at 192kbps and over three hours at 8kbps. Anything whose header cannot be
@@ -134,6 +138,34 @@ const MAX_LABEL_CHARS = 120;
  * to send audio rather than the cheap one.
  */
 const UNREADABLE_AUDIO_BYTES_PER_SECOND = 4_000;
+
+/**
+ * The floor under every transcription charge, whatever the file says.
+ *
+ * The mvhd header is a field in the caller's own upload, so "what the file
+ * says" is what the caller says: a 12MiB file can state one second. Bytes
+ * are the one measurement the caller cannot write. 24,000 bytes a second is
+ * 192kbps, the top of the range this service is sized for (see MAX_AUDIO_BYTES
+ * above), and a file cannot honestly hold fewer seconds than its size at the
+ * fastest honest rate would give. What the Mac itself produces is 64kbps mono
+ * AAC (8,000 B/s, RECORD_BITRATE and compress() in LectureAI), so the floor
+ * sits at three times the honest rate and never touches it. It only bites on
+ * audio encoded above 192kbps, which the Mac sends only when the source it was
+ * given was already AAC at that rate (a stream copy). That case is charged
+ * for size rather than length, at worst 1.7x for a 320kbps stereo file.
+ *
+ * It is a floor, not the bill: the provider's own measurement replaces it
+ * after transcription whenever that is larger (see settle below).
+ */
+export const AUDIO_FLOOR_BYTES_PER_SECOND = 24_000;
+
+/** Seconds the meter charges up front: the largest of what the header, the caller, and the byte count each say. */
+export function chargedSeconds(measured: number | null, declared: number, byteLength: number): number {
+  const floor = Math.ceil(byteLength / AUDIO_FLOOR_BYTES_PER_SECOND);
+  return measured === null
+    ? Math.max(Math.ceil(declared), floor, Math.ceil(byteLength / UNREADABLE_AUDIO_BYTES_PER_SECOND))
+    : Math.max(Math.ceil(measured), Math.ceil(declared), floor);
+}
 
 /** Requests per account per window, per endpoint. */
 const RATE_WINDOW_SECONDS = 60;
@@ -316,10 +348,14 @@ async function transcribeUpstream(
   c: Context<AppEnv>,
   bytes: Uint8Array,
   audio: File,
-): Promise<{ ok: true; text: string; provider: string } | { ok: false; what: string; status: number }> {
+): Promise<{ ok: true; text: string; provider: string; duration: number | null } | { ok: false; what: string; status: number }> {
   const legs = [
-    { who: "groq", what: "groq transcription", url: GROQ_TRANSCRIBE_URL, model: GROQ_TRANSCRIBE_MODEL, key: c.env.GROQ_API_KEY },
-    { who: "openai", what: "openai transcription", url: OPENAI_TRANSCRIBE_URL, model: OPENAI_TRANSCRIBE_MODEL, key: c.env.OPENAI_API_KEY },
+    // Groq is asked for verbose_json because that shape carries `duration`,
+    // the provider's own measurement of the audio. gpt-4o-mini-transcribe
+    // accepts only json or text and reports no duration, so that leg stays on
+    // text and the charge stays at the floor (see the settle in the route).
+    { who: "groq", what: "groq transcription", url: GROQ_TRANSCRIBE_URL, model: GROQ_TRANSCRIBE_MODEL, key: c.env.GROQ_API_KEY, format: "verbose_json" },
+    { who: "openai", what: "openai transcription", url: OPENAI_TRANSCRIBE_URL, model: OPENAI_TRANSCRIBE_MODEL, key: c.env.OPENAI_API_KEY, format: "text" },
   ];
 
   let last = { what: "transcription", status: 0 };
@@ -331,7 +367,7 @@ async function transcribeUpstream(
     const upstream = new FormData();
     upstream.set("file", new Blob([bytes], { type: audio.type || "audio/mp4" }), audio.name || "chunk.m4a");
     upstream.set("model", leg.model);
-    upstream.set("response_format", "text");
+    upstream.set("response_format", leg.format);
 
     let res: Response;
     try {
@@ -341,7 +377,17 @@ async function transcribeUpstream(
       last = { what: leg.what, status: 0 };
       continue;
     }
-    if (res.ok) return { ok: true, text: await res.text(), provider: leg.who };
+    if (res.ok) {
+      const body = await res.text();
+      if (leg.format === "text") return { ok: true, text: body, provider: leg.who, duration: null };
+      // A 200 that is not the JSON asked for is treated as a failed leg, not
+      // passed on: the body would otherwise become the transcript.
+      const parsed = verboseJson(body);
+      if (parsed) return { ok: true, text: parsed.text, provider: leg.who, duration: parsed.duration };
+      log(`proxy: ${leg.what} answered 200 with a body that was not verbose_json`);
+      last = { what: leg.what, status: 502 };
+      continue;
+    }
 
     // Logged on every fall-through, because falling through to OpenAI costs
     // real money and a Groq key that has quietly stopped working should show
@@ -350,6 +396,26 @@ async function transcribeUpstream(
     last = { what: leg.what, status: res.status };
   }
   return { ok: false, ...last };
+}
+
+/**
+ * The text and the provider-measured length out of a verbose_json answer.
+ * Null when it is not JSON or carries no text; `duration` is null when the
+ * field is missing or is not a positive finite number, which the caller
+ * treats as "no measurement" and bills the floor.
+ */
+export function verboseJson(body: string): { text: string; duration: number | null } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const { text, duration } = parsed as { text?: unknown; duration?: unknown };
+  if (typeof text !== "string") return null;
+  const d = typeof duration === "number" ? duration : typeof duration === "string" ? Number(duration) : NaN;
+  return { text, duration: Number.isFinite(d) && d > 0 ? d : null };
 }
 
 proxy.post("/proxy/transcribe", async (c) => {
@@ -396,9 +462,7 @@ proxy.post("/proxy/transcribe", async (c) => {
   // Read once: the same bytes are measured and then forwarded.
   const bytes = new Uint8Array(await audio.arrayBuffer());
   const measured = mp4DurationSeconds(bytes);
-  const seconds = measured === null
-    ? Math.max(Math.ceil(declared), Math.ceil(bytes.byteLength / UNREADABLE_AUDIO_BYTES_PER_SECOND))
-    : Math.max(Math.ceil(measured), Math.ceil(declared));
+  const seconds = chargedSeconds(measured, declared, bytes.byteLength);
   if (seconds > MAX_CHUNK_SECONDS) {
     return c.json({ error: "too_long", limit_seconds: MAX_CHUNK_SECONDS, audio_seconds: seconds }, 413);
   }
@@ -428,17 +492,31 @@ proxy.post("/proxy/transcribe", async (c) => {
   }
 
   const text = attempt.text.trim();
-  // Audio seconds are known before the call, so settling confirms the
-  // reservation rather than correcting it. It still has to happen: a
-  // reservation nobody settles is swept back to the account in the end.
-  await db.settleUsage(c.env.DB, held.id, seconds, attempt.provider);
+  // The reservation was the floor. When the provider measured the audio
+  // itself, the bill is the larger of the two: it can rise above the floor
+  // and never fall below it, so a provider that reports something short (or
+  // nothing) cannot make a lying header cheaper than the floor already made
+  // it. Settling upward is one UPDATE of the row already counted, so it
+  // opens no window in which the reservation was missing; the one thing it
+  // can do is take the account, or the month, past its limit by the audio
+  // that was longer than it looked. That audio has already been transcribed
+  // and paid for at the provider, so refusing to record it would only hide
+  // the cost. The next request sees the true total and is refused.
+  let billed = seconds;
+  if (attempt.duration !== null && Math.ceil(attempt.duration) > seconds) {
+    billed = Math.ceil(attempt.duration);
+    log(`proxy: provider measured ${billed}s of audio against ${seconds}s reserved`);
+  }
+  // It still has to happen even when nothing changes: a reservation nobody
+  // settles is swept back to the account in the end.
+  await db.settleUsage(c.env.DB, held.id, billed, attempt.provider);
   // Spending the last of a Stripe trial is what ends it: the card that was
   // collected at checkout is charged and the plan's real allowance arrives by
   // webhook. Done after the answer is already settled and outside the
   // response, because a paid call must not wait on Stripe's API to return
   // audio the caller has already been billed for.
   c.executionCtx.waitUntil(endTrialIfSpent(c.env, account.id));
-  return c.json({ text, audio_seconds: seconds });
+  return c.json({ text, audio_seconds: billed });
 });
 
 /**
