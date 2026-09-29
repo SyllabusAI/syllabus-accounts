@@ -162,3 +162,12 @@ global ceilings. Cloudflare absorbs volumetric floods in front of all of it.
   per-address limits are ten times the per-account ones (600 sign-ins and
   callbacks, 300 approvals per 10 minutes) and only stop a script; the
   per-account limits hold each person to human rates.
+
+## 0.6.0 launch review
+
+The launch review is [threat-model-0.6.md](threat-model-0.6.md), with the
+OWASP ASVS Level 1 pass in [asvs-l1-checklist.md](asvs-l1-checklist.md) and the
+key rotation runbook in [drive-key-rotation.md](drive-key-rotation.md). It
+qualifies two statements above: the monthly ceiling in threats 1 and 8 counts
+the seconds the caller's audio file says it has (finding F-01), and panels are served off the account origin only once
+`PANEL_ORIGIN` is set (finding F-02).
