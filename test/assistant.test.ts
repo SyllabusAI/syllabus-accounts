@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
-import { ASSISTANT_MODEL, costOf, SESSION_QUESTIONS, thinkingParam } from "../src/assistant";
+import { ASSISTANT_MODEL, costOf, inTrial, SESSION_QUESTIONS, thinkingParam, TRIAL_MODEL, trialModel } from "../src/assistant";
 import { claimDevice, get, postJson } from "./helpers";
 
 afterEach(() => {
@@ -388,5 +388,80 @@ describe("thinking, when it is turned on", () => {
   it("asks for adaptive thinking with the reasoning left out of the reply", () => {
     expect(thinkingParam("adaptive")).toEqual({ type: "adaptive", display: "omitted" });
     expect(thinkingParam("disabled")).toEqual({ type: "disabled" });
+  });
+});
+
+describe("the Sonnet 5 / 5.5 trial", () => {
+  it("names only the accounts in the secret, whatever their case", () => {
+    expect(inTrial("trial-b@example.com", "trial-a@example.com, Trial-B@example.com")).toBe(true);
+    expect(inTrial("someone@example.com", "trial-a@example.com")).toBe(false);
+    expect(inTrial("trial-a@example.com", undefined)).toBe(false);
+    expect(inTrial("trial-a@example.com", "")).toBe(false);
+  });
+
+  it("alternates question by question, whichever model a session starts on", () => {
+    for (const id of ["abc", "abd", "x"]) {
+      const models = [1, 2, 3, 4].map((q) => trialModel(id, q));
+      expect(new Set(models)).toEqual(new Set([ASSISTANT_MODEL, TRIAL_MODEL]));
+      expect(models[0]).not.toBe(models[1]);
+      expect(models[0]).toBe(models[2]);
+    }
+    expect(trialModel("abc", 1)).not.toBe(trialModel("abd", 1));
+  });
+
+  it("keeps thinking off on both models", () => {
+    expect(thinkingParam("disabled", ASSISTANT_MODEL)).toEqual({ type: "disabled" });
+    expect(thinkingParam("disabled", TRIAL_MODEL)).toEqual({ type: "between_tools" });
+  });
+
+  it("leaves an account outside the trial on Sonnet 5, and says so", async () => {
+    const { token, account } = await claimDevice("not-in-trial@example.com");
+    await pro(account.id);
+    const bodies = upstream(() => answered());
+    const first = await events(await ask(token));
+    const sid = first[0].session_id ?? first[first.length - 1].session_id;
+    await events(await ask(token, { session_id: sid }));
+    expect(bodies.map((b) => b.model)).toEqual([ASSISTANT_MODEL, ASSISTANT_MODEL]);
+    expect(bodies.map((b) => b.thinking)).toEqual([{ type: "disabled" }, { type: "disabled" }]);
+    expect(first[first.length - 1]).toMatchObject({ type: "done", model: ASSISTANT_MODEL });
+  });
+
+  it("alternates a trial account's questions, and reports which model answered", async () => {
+    const { token, account } = await claimDevice("TRIAL-A@example.com");
+    await pro(account.id);
+    const bodies = upstream(() => answered());
+    const dones: Record<string, any>[] = [];
+    let sid: string | undefined;
+    for (let i = 0; i < 4; i++) {
+      const got = await events(await ask(token, sid ? { session_id: sid } : {}));
+      const done = got[got.length - 1];
+      sid = done.session_id;
+      dones.push(done);
+    }
+    const models = bodies.map((b) => b.model);
+    expect(new Set(models)).toEqual(new Set([ASSISTANT_MODEL, TRIAL_MODEL]));
+    for (let i = 1; i < models.length; i++) expect(models[i]).not.toBe(models[i - 1]);
+    expect(dones.map((d) => d.model)).toEqual(models);
+    for (const b of bodies) {
+      expect(b.thinking).toEqual(b.model === TRIAL_MODEL ? { type: "between_tools" } : { type: "disabled" });
+    }
+  });
+
+  it("answers an escalation on the model that asked for the transcripts", async () => {
+    const { token, account } = await claimDevice("trial-b@example.com");
+    await pro(account.id);
+    const bodies = upstream(escalated, () => answered("From the transcript.", USAGE, 300));
+    const first = await events(await ask(token));
+    const esc = first.find((e) => e.type === "escalate")!;
+    const second = await events(
+      await ask(token, {
+        session_id: esc.session_id,
+        continuation: esc.continuation,
+        transcripts: [{ title: "ACCT-4321 2026-09-15: Job Order Costing (full transcript)", body: "Verbatim words." }],
+      }),
+    );
+    expect(bodies[1].model).toBe(bodies[0].model);
+    expect(bodies[1].thinking).toEqual(bodies[0].thinking);
+    expect(second[second.length - 1]).toMatchObject({ type: "done", model: bodies[0].model });
   });
 });

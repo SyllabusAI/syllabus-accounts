@@ -24,6 +24,8 @@ export default defineConfig(async () => {
             OPENAI_API_KEY: "sk-test-openai",
             GROQ_API_KEY: "gsk-test-groq",
             ANTHROPIC_API_KEY: "sk-ant-test",
+            // Two accounts in the Sonnet 5 / 5.5 trial; everyone else is not.
+            ASSISTANT_TRIAL_ACCOUNTS: "trial-a@example.com, Trial-B@example.com",
             STRIPE_PRICE_STARTER: "price_test_starter",
             STRIPE_PRICE_STANDARD: "price_test_standard",
             STRIPE_PRICE_PRO: "price_test_pro",
