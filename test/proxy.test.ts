@@ -759,6 +759,128 @@ describe("which transcription provider gets the audio", () => {
   });
 });
 
+describe("a chunk the Mac found hard to hear", () => {
+  const GROQ = "https://api.groq.com/openai/v1/audio/transcriptions";
+  const OPENAI = "https://api.openai.com/v1/audio/transcriptions";
+
+  function highForm(realSeconds: number) {
+    const form = m4aForm(realSeconds, realSeconds);
+    form.set("quality", "high");
+    return form;
+  }
+
+  const segment = (over: Record<string, unknown> = {}) => ({
+    id: 0, start: 0, end: 4.2, avg_logprob: -0.31, no_speech_prob: 0.02, compression_ratio: 1.4, text: " Today we start costing.", ...over,
+  });
+
+  it("passes Groq's segment scores back with the text, and stores none of it", async () => {
+    upstream((url) =>
+      url === GROQ
+        ? new Response(JSON.stringify({ text: "Today we start costing.", duration: 480, segments: [segment()] }), { status: 200 })
+        : new Response("no openai leg", { status: 500 }),
+    );
+    const { account, token } = await claimDevice("segments@example.com");
+
+    const res = await postAudio(m4aForm(480, 480), bearer(token));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      text: "Today we start costing.",
+      audio_seconds: 480,
+      charged_seconds: 480,
+      quality: "standard",
+      provider: "groq",
+      segments: [{ start: 0, end: 4.2, avg_logprob: -0.31, no_speech_prob: 0.02, compression_ratio: 1.4, text: " Today we start costing." }],
+    });
+    const row = await env.DB.prepare("SELECT * FROM usage WHERE account_id = ?").bind(account.id).first();
+    expect(JSON.stringify(row)).not.toContain("costing");
+  });
+
+  it("drops a segment with a score missing rather than inventing one", async () => {
+    upstream(() =>
+      new Response(
+        JSON.stringify({ text: "x", segments: [segment(), segment({ avg_logprob: "low" }), segment({ start: 9, end: 3 }), "junk"] }),
+        { status: 200 },
+      ),
+    );
+    const { token } = await claimDevice("segments-junk@example.com");
+    const body = (await (await postAudio(m4aForm(480, 480), bearer(token))).json()) as { segments: unknown[] };
+    expect(body.segments).toHaveLength(1);
+  });
+
+  it("sends no segments from the OpenAI fallback, which has none", async () => {
+    upstream((url) => (url === GROQ ? new Response("busy", { status: 429 }) : new Response("from openai", { status: 200 })));
+    const { token } = await claimDevice("segments-fallback@example.com");
+    const body = (await (await postAudio(m4aForm(480, 480), bearer(token))).json()) as Record<string, unknown>;
+    expect(body.provider).toBe("openai");
+    expect(body).not.toHaveProperty("segments");
+  });
+
+  it("goes to gpt-4o-transcribe alone, and charges three times the chunk", async () => {
+    const calls = upstream(() => new Response(JSON.stringify({ text: "the clearer transcript" }), { status: 200 }));
+    const { account, token } = await claimDevice("high@example.com");
+
+    const res = await postAudio(highForm(480), bearer(token));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      text: "the clearer transcript", audio_seconds: 480, charged_seconds: 1440, quality: "high", provider: "openai-high",
+    });
+    expect(calls.map((c) => c.url)).toEqual([OPENAI]);
+    const sent = calls[0].init.body as FormData;
+    expect(sent.get("model")).toBe("gpt-4o-transcribe");
+    expect(sent.get("response_format")).toBe("json");
+    expect(sent.get("quality")).toBeNull();
+    const rows = await env.DB.prepare("SELECT provider, units, state FROM usage WHERE account_id = ?").bind(account.id).all();
+    expect(rows.results).toEqual([{ provider: "openai-high", units: 1440, state: "final" }]);
+  });
+
+  it("never falls back to a cheaper model at the higher rate", async () => {
+    const calls = upstream(() => new Response("overloaded", { status: 503 }));
+    const { account, token } = await claimDevice("high-down@example.com");
+
+    const res = await postAudio(highForm(480), bearer(token));
+    expect(res.status).toBe(502);
+    expect(calls.map((c) => c.url)).toEqual([OPENAI]);
+    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(0);
+  });
+
+  it("refuses a second pass the allowance cannot cover, before any call", async () => {
+    const calls = upstream(() => new Response(JSON.stringify({ text: "x" }), { status: 200 }));
+    const { account, token } = await claimDevice("high-capped@example.com");
+    // 480 seconds would fit; 1,440 does not.
+    await db.putAllowance(env.DB, account.id, grant(1000, TRIAL_ALLOWANCE.summary_tokens));
+
+    const res = await postAudio(highForm(480), bearer(token));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ error: "allowance_exhausted", kind: "transcribe", used: 0, allowance: 1000 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("counts a second pass as its own line on /proxy/usage", async () => {
+    upstream((url) =>
+      url === GROQ ? new Response(JSON.stringify({ text: "x", duration: 480 }), { status: 200 }) : new Response(JSON.stringify({ text: "y" }), { status: 200 }),
+    );
+    const { token } = await claimDevice("high-usage@example.com");
+    await postAudio(m4aForm(480, 480), bearer(token));
+    await postAudio(highForm(480), bearer(token));
+
+    const usage = (await (await SELF.fetch(ORIGIN + "/proxy/usage", { headers: bearer(token) })).json()) as {
+      audio_seconds: { used: number };
+      transcribed_by: Record<string, { calls: number; seconds: number }>;
+    };
+    expect(usage.audio_seconds.used).toBe(480 + 1440);
+    expect(usage.transcribed_by).toEqual({ groq: { calls: 1, seconds: 480 }, "openai-high": { calls: 1, seconds: 1440 } });
+  });
+
+  it("turns away a quality it does not offer", async () => {
+    const calls = upstream(transcriptionOk());
+    const { token } = await claimDevice("high-bad@example.com");
+    const form = m4aForm(480, 480);
+    form.set("quality", "ultra");
+    expect((await postAudio(form, bearer(token))).status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("a reservation that is not spent goes back", () => {
   it("is released when the provider fails, so a retry still fits", async () => {
     upstream(() => new Response("upstream is down", { status: 503 }));

@@ -85,6 +85,24 @@ const GROQ_TRANSCRIBE_MODEL = "whisper-large-v3";
 const OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions";
 const OPENAI_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
 
+/**
+ * The second pass a Mac can ask for on a chunk it judged hard to hear.
+ *
+ * The Mac scores every chunk from the segment scores the Groq leg returns
+ * (intake/quality.py in LectureAI), and when the lecturer's own speech in it
+ * came back unsure, sends the same chunk again with `quality=high`. That goes
+ * to gpt-4o-transcribe and nowhere else: falling back to a cheaper model
+ * would bill the higher rate for the transcript the caller already has.
+ *
+ * It is charged against the same monthly audio allowance, at
+ * HIGH_QUALITY_RATE times the chunk's length. gpt-4o-transcribe is $0.36 an
+ * hour against Groq's $0.111, so 3x keeps a second pass from costing this
+ * service more than it takes off the allowance. The first pass was billed on
+ * its own request; this is billed on top of it, because it is a second call.
+ */
+const HIGH_QUALITY_MODEL = "gpt-4o-transcribe";
+export const HIGH_QUALITY_RATE = 3;
+
 const MESSAGES_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const SUMMARY_MODEL = "claude-sonnet-5";
@@ -328,8 +346,10 @@ export function label(raw: unknown): string {
 /**
  * One audio chunk in, its transcript out.
  *
- * multipart/form-data with an `audio` file part and a `duration_seconds`
- * field. Everything about the upstream call other than those bytes is fixed
+ * multipart/form-data with an `audio` file part, a `duration_seconds`
+ * field, and optionally `quality=high` for a second pass on a chunk the Mac
+ * found hard to hear (see HIGH_QUALITY_MODEL), which is charged at
+ * HIGH_QUALITY_RATE. Everything about the upstream call other than those bytes is fixed
  * above; in particular no `prompt` is sent, because passing the previous
  * chunk's tail makes these models re-transcribe it (see _transcribe_chunk in
  * intake/transcribe.py).
@@ -341,6 +361,8 @@ export function label(raw: unknown): string {
  * attempt rather than reused: a FormData that has been sent has had its blob
  * consumed, and a silently empty retry body is worse than a second object.
  *
+ * A `high` chunk has one leg only, gpt-4o-transcribe (see HIGH_QUALITY_MODEL).
+ *
  * Only these three fields ever reach a provider. Neither the caller's own
  * field names nor a prompt is forwarded, on either leg.
  */
@@ -348,15 +370,28 @@ async function transcribeUpstream(
   c: Context<AppEnv>,
   bytes: Uint8Array,
   audio: File,
-): Promise<{ ok: true; text: string; provider: string; duration: number | null } | { ok: false; what: string; status: number }> {
-  const legs = [
-    // Groq is asked for verbose_json because that shape carries `duration`,
-    // the provider's own measurement of the audio. gpt-4o-mini-transcribe
-    // accepts only json or text and reports no duration, so that leg stays on
-    // text and the charge stays at the floor (see the settle in the route).
-    { who: "groq", what: "groq transcription", url: GROQ_TRANSCRIBE_URL, model: GROQ_TRANSCRIBE_MODEL, key: c.env.GROQ_API_KEY, format: "verbose_json" },
-    { who: "openai", what: "openai transcription", url: OPENAI_TRANSCRIBE_URL, model: OPENAI_TRANSCRIBE_MODEL, key: c.env.OPENAI_API_KEY, format: "text" },
-  ];
+  quality: Quality,
+): Promise<
+  | { ok: true; text: string; provider: string; duration: number | null; segments: Segment[] | null }
+  | { ok: false; what: string; status: number }
+> {
+  const legs =
+    quality === "high"
+      ? [
+          // json, not text: a 200 that is not JSON is then a failed leg rather
+          // than a transcript, the same rule the Groq leg follows.
+          { who: "openai-high", what: "openai high-quality transcription", url: OPENAI_TRANSCRIBE_URL, model: HIGH_QUALITY_MODEL, key: c.env.OPENAI_API_KEY, format: "json" },
+        ]
+      : [
+          // Groq is asked for verbose_json because that shape carries
+          // `duration`, the provider's own measurement of the audio, and the
+          // per-segment scores the Mac judges a chunk by.
+          // gpt-4o-mini-transcribe accepts only json or text and reports
+          // neither, so that leg stays on text and the charge stays at the
+          // floor (see the settle in the route).
+          { who: "groq", what: "groq transcription", url: GROQ_TRANSCRIBE_URL, model: GROQ_TRANSCRIBE_MODEL, key: c.env.GROQ_API_KEY, format: "verbose_json" },
+          { who: "openai", what: "openai transcription", url: OPENAI_TRANSCRIBE_URL, model: OPENAI_TRANSCRIBE_MODEL, key: c.env.OPENAI_API_KEY, format: "text" },
+        ];
 
   let last = { what: "transcription", status: 0 };
   for (const leg of legs) {
@@ -379,12 +414,12 @@ async function transcribeUpstream(
     }
     if (res.ok) {
       const body = await res.text();
-      if (leg.format === "text") return { ok: true, text: body, provider: leg.who, duration: null };
+      if (leg.format === "text") return { ok: true, text: body, provider: leg.who, duration: null, segments: null };
       // A 200 that is not the JSON asked for is treated as a failed leg, not
       // passed on: the body would otherwise become the transcript.
       const parsed = verboseJson(body);
-      if (parsed) return { ok: true, text: parsed.text, provider: leg.who, duration: parsed.duration };
-      log(`proxy: ${leg.what} answered 200 with a body that was not verbose_json`);
+      if (parsed) return { ok: true, text: parsed.text, provider: leg.who, duration: parsed.duration, segments: parsed.segments };
+      log(`proxy: ${leg.what} answered 200 with a body that was not ${leg.format}`);
       last = { what: leg.what, status: 502 };
       continue;
     }
@@ -398,13 +433,57 @@ async function transcribeUpstream(
   return { ok: false, ...last };
 }
 
+/** `standard` is what every Mac before 0.6.0 gets, having sent no field at all. */
+export type Quality = "standard" | "high";
+
 /**
- * The text and the provider-measured length out of a verbose_json answer.
- * Null when it is not JSON or carries no text; `duration` is null when the
- * field is missing or is not a positive finite number, which the caller
- * treats as "no measurement" and bills the floor.
+ * One stretch of a verbose_json answer, with the three scores whisper gives
+ * it: how sure the model was of its words (avg_logprob), how sure it was
+ * there was speech at all (no_speech_prob), and how repetitive the text is
+ * (compression_ratio, which climbs when the model loops on audio it cannot
+ * make out). Passed back to the caller as they came, never stored.
  */
-export function verboseJson(body: string): { text: string; duration: number | null } | null {
+export type Segment = {
+  start: number;
+  end: number;
+  avg_logprob: number;
+  no_speech_prob: number;
+  compression_ratio: number;
+  text: string;
+};
+
+/** More than an 8 minute chunk ever has; a runaway answer is cut, not relayed. */
+const MAX_SEGMENTS = 2000;
+const MAX_SEGMENT_CHARS = 2000;
+
+function segmentsOf(raw: unknown): Segment[] | null {
+  if (!Array.isArray(raw)) return null;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const out: Segment[] = [];
+  for (const item of raw.slice(0, MAX_SEGMENTS)) {
+    if (typeof item !== "object" || item === null) continue;
+    const s = item as Record<string, unknown>;
+    const start = num(s.start), end = num(s.end), lp = num(s.avg_logprob), ns = num(s.no_speech_prob), cr = num(s.compression_ratio);
+    // A segment missing any score is not one the Mac can judge, so it is left
+    // out rather than passed on with a made-up number.
+    if (start === null || end === null || lp === null || ns === null || cr === null || end < start) continue;
+    out.push({
+      start, end, avg_logprob: lp, no_speech_prob: ns, compression_ratio: cr,
+      text: typeof s.text === "string" ? s.text.slice(0, MAX_SEGMENT_CHARS) : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * The text, the provider-measured length, and the segment scores out of a
+ * verbose_json (or plain json) answer. Null when it is not JSON or carries
+ * no text; `duration` is null when the field is missing or is not a positive
+ * finite number, which the caller treats as "no measurement" and bills the
+ * floor. `segments` is null when the answer has none, which a json answer
+ * never does.
+ */
+export function verboseJson(body: string): { text: string; duration: number | null; segments: Segment[] | null } | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -412,10 +491,10 @@ export function verboseJson(body: string): { text: string; duration: number | nu
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { text, duration } = parsed as { text?: unknown; duration?: unknown };
+  const { text, duration, segments } = parsed as { text?: unknown; duration?: unknown; segments?: unknown };
   if (typeof text !== "string") return null;
   const d = typeof duration === "number" ? duration : typeof duration === "string" ? Number(duration) : NaN;
-  return { text, duration: Number.isFinite(d) && d > 0 ? d : null };
+  return { text, duration: Number.isFinite(d) && d > 0 ? d : null, segments: segmentsOf(segments) };
 }
 
 proxy.post("/proxy/transcribe", async (c) => {
@@ -459,6 +538,12 @@ proxy.post("/proxy/transcribe", async (c) => {
   if (!Number.isFinite(declared) || declared <= 0 || declared > MAX_CHUNK_SECONDS) {
     return c.json({ error: "bad_request", detail: `duration_seconds must be 1 to ${MAX_CHUNK_SECONDS}` }, 400);
   }
+  const rawQuality = form.get("quality");
+  if (rawQuality !== null && rawQuality !== "standard" && rawQuality !== "high") {
+    return c.json({ error: "bad_request", detail: "quality must be standard or high" }, 400);
+  }
+  const quality: Quality = rawQuality === "high" ? "high" : "standard";
+  const rate = quality === "high" ? HIGH_QUALITY_RATE : 1;
   // Read once: the same bytes are measured and then forwarded.
   const bytes = new Uint8Array(await audio.arrayBuffer());
   const measured = mp4DurationSeconds(bytes);
@@ -466,26 +551,29 @@ proxy.post("/proxy/transcribe", async (c) => {
   if (seconds > MAX_CHUNK_SECONDS) {
     return c.json({ error: "too_long", limit_seconds: MAX_CHUNK_SECONDS, audio_seconds: seconds }, 413);
   }
+  // What the allowance is charged, which is not the audio's length on a
+  // second pass. Every check and the reservation below are in these units.
+  const charge = seconds * rate;
 
   const allowed = await allowanceFor(c.env.DB, account.id);
   await db.sweepReservations(c.env.DB, account.id);
-  if ((await db.usedGlobally(c.env.DB, "transcribe")) + seconds > GLOBAL_CEILING.audio_seconds) {
+  if ((await db.usedGlobally(c.env.DB, "transcribe")) + charge > GLOBAL_CEILING.audio_seconds) {
     return refuse(c, ceilingReached("transcribe"));
   }
   // Held before the call, not billed after it: a second request arriving at
   // the same moment sees this one's seconds already spoken for.
   const held = await db.reserveUsage(
-    c.env.DB, account.id, device.id, "transcribe", seconds, allowed.audio_seconds, GLOBAL_CEILING.audio_seconds,
+    c.env.DB, account.id, device.id, "transcribe", charge, allowed.audio_seconds, GLOBAL_CEILING.audio_seconds,
   );
   if (!held) {
-    if ((await db.usedGlobally(c.env.DB, "transcribe")) + seconds > GLOBAL_CEILING.audio_seconds) {
+    if ((await db.usedGlobally(c.env.DB, "transcribe")) + charge > GLOBAL_CEILING.audio_seconds) {
       return refuse(c, ceilingReached("transcribe"));
     }
     const used = await db.usedThisPeriod(c.env.DB, account.id, "transcribe");
-    return refuse(c, overAllowance("transcribe", used, seconds, allowed.audio_seconds));
+    return refuse(c, overAllowance("transcribe", used, charge, allowed.audio_seconds));
   }
 
-  const attempt = await transcribeUpstream(c, bytes, audio);
+  const attempt = await transcribeUpstream(c, bytes, audio, quality);
   if (!attempt.ok) {
     await db.releaseUsage(c.env.DB, held.id);
     return refuse(c, providerFailed(attempt.what, attempt.status));
@@ -509,14 +597,24 @@ proxy.post("/proxy/transcribe", async (c) => {
   }
   // It still has to happen even when nothing changes: a reservation nobody
   // settles is swept back to the account in the end.
-  await db.settleUsage(c.env.DB, held.id, billed, attempt.provider);
+  await db.settleUsage(c.env.DB, held.id, billed * rate, attempt.provider);
   // Spending the last of a Stripe trial is what ends it: the card that was
   // collected at checkout is charged and the plan's real allowance arrives by
   // webhook. Done after the answer is already settled and outside the
   // response, because a paid call must not wait on Stripe's API to return
   // audio the caller has already been billed for.
   c.executionCtx.waitUntil(endTrialIfSpent(c.env, account.id));
-  return c.json({ text, audio_seconds: billed });
+  // `audio_seconds` is the audio's length, as it always was; `charged_seconds`
+  // is what came off the allowance, which is more on a second pass. The
+  // segments are the Groq leg's scores, absent on either OpenAI leg.
+  return c.json({
+    text,
+    audio_seconds: billed,
+    charged_seconds: billed * rate,
+    quality,
+    provider: attempt.provider,
+    ...(attempt.segments ? { segments: attempt.segments } : {}),
+  });
 });
 
 /**
