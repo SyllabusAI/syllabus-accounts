@@ -213,7 +213,7 @@ google.get(CALLBACK_PATH, async (c) => {
   await applyTrialBlock(c.env, account.id, claims.sub);
   log(`signed in: account ${account.id}`);
   clearHostCookie(c, FLOW_COOKIE);
-  await setSession(c, account.id);
+  await setSession(c, account);
   return c.redirect(flow.next);
 });
 

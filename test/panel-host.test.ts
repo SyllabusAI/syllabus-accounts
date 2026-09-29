@@ -443,7 +443,7 @@ describe("the account session cookie", () => {
   it("is host-only, so it never reaches a panel host", async () => {
     const app = new Hono<AppEnv>();
     app.get("/", async (c) => {
-      await setSession(c, "acct-1");
+      await setSession(c, { id: "acct-1", session_version: 0 });
       return c.text("ok");
     });
     const res = await app.request("/", {}, { ...(env as unknown as Bindings), PUBLIC_URL: ORIGIN });
