@@ -7,3 +7,4 @@ dist/
 
 # git worktrees for parallel Claude Code sessions
 .claude/worktrees/
+bulk-revoke-*.jsonl
