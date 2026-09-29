@@ -22,16 +22,25 @@ function newClient(): Record<string, string> {
   return { "CF-Connecting-IP": `203.0.113.${clients % 250}:${clients}` };
 }
 
+/**
+ * A signed session cookie for an account, as the sign-in callback writes it.
+ * `v` overrides the version the cookie carries; null leaves it out, like a
+ * cookie issued before session versions existed.
+ */
+export async function sessionCookieFor(
+  account: { id: string; session_version: number },
+  opts: { v?: number | null; t?: number } = {},
+): Promise<string> {
+  const body: Record<string, unknown> = { a: account.id, t: opts.t ?? Date.now() };
+  if (opts.v !== null) body.v = opts.v ?? account.session_version;
+  const cookie = await serializeSigned(SESSION_COOKIE, JSON.stringify(body), env.SESSION_SECRET, { path: "/", secure: true });
+  return cookie.split(";")[0];
+}
+
 /** An account in the test database, plus a Cookie header that is its session. */
 export async function signedInAs(email: string, sub = "sub-" + email) {
   const account = await upsertAccount(env.DB, { sub, email, name: "Test Person", picture: "" });
-  const cookie = await serializeSigned(
-    SESSION_COOKIE,
-    JSON.stringify({ a: account.id, t: Date.now() }),
-    env.SESSION_SECRET,
-    { path: "/", secure: true },
-  );
-  return { account, cookie: cookie.split(";")[0] };
+  return { account, cookie: await sessionCookieFor(account) };
 }
 
 export function get(path: string, headers: Record<string, string> = {}) {

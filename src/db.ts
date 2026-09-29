@@ -36,6 +36,7 @@ export async function upsertAccount(db: D1Database, who: GoogleIdentity): Promis
     created_at: ts,
     last_signin_at: ts,
     token_version: 0,
+    session_version: 0,
   };
   await db
     .prepare(
@@ -115,14 +116,28 @@ export async function insertDeviceToken(
 }
 
 /**
- * Incident recovery: every token on this account stops working at once, and
- * every device is removed. One statement bumps the account past every token
- * ever issued under it, so a replacement enrolled by a stolen token dies with
- * the token that enrolled it. Returns how many devices were removed.
+ * Incident recovery: every token on this account stops working at once, every
+ * device is removed, and every browser is signed out. One statement bumps the
+ * account past every device token and every session cookie ever issued under
+ * it, so a replacement enrolled by a stolen token dies with the token that
+ * enrolled it, and a stolen cookie dies without anyone having to find it.
+ *
+ * Returns how many devices were removed and the new session_version, which
+ * the caller writes into the current browser's cookie so the person who
+ * pressed the button stays signed in. RETURNING gives the value this very
+ * statement wrote, so two presses at once cannot hand back the same number.
  */
-export async function revokeEverything(db: D1Database, accountId: string): Promise<number> {
+export async function revokeEverything(
+  db: D1Database,
+  accountId: string,
+): Promise<{ removed: number; sessionVersion: number }> {
   const ts = now();
-  await db.prepare("UPDATE accounts SET token_version = token_version + 1 WHERE id = ?").bind(accountId).run();
+  const bumped = await db
+    .prepare(
+      "UPDATE accounts SET token_version = token_version + 1, session_version = session_version + 1 WHERE id = ? RETURNING session_version",
+    )
+    .bind(accountId)
+    .first<{ session_version: number }>();
   await db
     .prepare("UPDATE device_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND device_id IN (SELECT id FROM devices WHERE account_id = ?)")
     .bind(ts, accountId)
@@ -131,7 +146,7 @@ export async function revokeEverything(db: D1Database, accountId: string): Promi
     .prepare("UPDATE devices SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL")
     .bind(ts, accountId)
     .run();
-  return res.meta.changes ?? 0;
+  return { removed: res.meta.changes ?? 0, sessionVersion: Number(bumped?.session_version ?? 0) };
 }
 
 /**
@@ -176,6 +191,7 @@ export async function resolveDeviceToken(
     created_at: row.created_at as string,
     last_signin_at: row.last_signin_at as string,
     token_version: Number(row.token_version ?? 0),
+    session_version: Number(row.session_version ?? 0),
   };
   return { device, account, lastUsedAt: row.t_last_used_at ?? null };
 }
