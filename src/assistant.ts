@@ -78,6 +78,38 @@ const ANTHROPIC_VERSION = "2023-06-01";
 export const ASSISTANT_MODEL = "claude-sonnet-5";
 
 /**
+ * The model a side-by-side trial alternates with. Same rates as Sonnet 5, so
+ * RATES and every cost figure hold for both. Only accounts named in the
+ * ASSISTANT_TRIAL_ACCOUNTS secret ever reach it; everyone else is on
+ * ASSISTANT_MODEL exactly as before.
+ */
+export const TRIAL_MODEL = "claude-sonnet-5-5";
+
+/**
+ * Whether an account is in the trial: its email is in the comma-separated
+ * ASSISTANT_TRIAL_ACCOUNTS secret. A secret rather than a var so that nobody's
+ * address is written into this public repo. Unset means no trial.
+ */
+export function inTrial(email: string, list: string | undefined): boolean {
+  if (!list) return false;
+  const want = email.trim().toLowerCase();
+  return list.split(",").some((e) => e.trim().toLowerCase() === want);
+}
+
+/**
+ * Which model answers a question in the trial: the two alternate question by
+ * question. The session id picks which one a session starts on, so a sitting
+ * of one question is not always Sonnet 5, and an escalation reads the same
+ * question number and so stays on the model that asked for the transcripts
+ * (its thinking blocks are bound to that model).
+ */
+export function trialModel(sessionId: string, question: number): string {
+  let seed = 0;
+  for (const ch of sessionId) seed = (seed + ch.charCodeAt(0)) % 2;
+  return (seed + question) % 2 === 0 ? ASSISTANT_MODEL : TRIAL_MODEL;
+}
+
+/**
  * Sonnet 5's rates, per token, in millionths of a dollar: $2 and $10 per
  * million in and out, a 5-minute cache write at 1.25x the input rate, and a
  * cache read at 0.1x.
@@ -103,9 +135,16 @@ const MAX_OUTPUT_TOKENS = 8000;
  */
 export const ASSISTANT_THINKING: "disabled" | "adaptive" = "disabled";
 
-/** The request's `thinking` field for a mode. "omitted" display: the panel never shows reasoning. */
-export function thinkingParam(mode: "disabled" | "adaptive" = ASSISTANT_THINKING) {
-  return mode === "adaptive" ? ({ type: "adaptive", display: "omitted" } as const) : ({ type: "disabled" } as const);
+/**
+ * The request's `thinking` field for a mode. "omitted" display: the panel never shows reasoning.
+ *
+ * Sonnet 5.5 refuses `disabled` with a 400; its thinking-off setting is
+ * `between_tools`, which takes no other field. That keeps the trial a fair
+ * comparison: both models answer with thinking off, as Pro was costed.
+ */
+export function thinkingParam(mode: "disabled" | "adaptive" = ASSISTANT_THINKING, model: string = ASSISTANT_MODEL) {
+  if (mode === "adaptive") return { type: "adaptive", display: "omitted" } as const;
+  return model === TRIAL_MODEL ? ({ type: "between_tools" } as const) : ({ type: "disabled" } as const);
 }
 
 const FETCH_TOOL_NAME = "fetch_transcripts";
@@ -477,7 +516,7 @@ function documentBlock(doc: Doc, cache: boolean) {
  * Stage two differs only in what follows the breakpoint and in tool_choice,
  * which is what stops a second escalation.
  */
-function upstreamBody(asked: Asked) {
+function upstreamBody(asked: Asked, model: string = ASSISTANT_MODEL) {
   const summaries = asked.summaries.map((d, i) => documentBlock(d, i === asked.summaries.length - 1));
   const messages: unknown[] = [{ role: "user", content: [...summaries, { type: "text", text: asked.question }] }];
   if (asked.continuation) {
@@ -497,9 +536,9 @@ function upstreamBody(asked: Asked) {
     });
   }
   return {
-    model: ASSISTANT_MODEL,
+    model,
     max_tokens: MAX_OUTPUT_TOKENS,
-    thinking: thinkingParam(),
+    thinking: thinkingParam(ASSISTANT_THINKING, model),
     stream: true,
     system: SYSTEM_PROMPT,
     tools: [FETCH_TOOL],
@@ -760,6 +799,12 @@ assistant.post("/proxy/assistant", async (c) => {
     return c.json({ error: "allowance_exhausted", kind: "assistant", unit: "dollars", period: db.usagePeriod() }, 402);
   }
 
+  // Question numbers only ever grow, and an escalation reads the number of the
+  // question it belongs to, so it lands on the same model as that question.
+  const model = inTrial(account.email, c.env.ASSISTANT_TRIAL_ACCOUNTS)
+    ? trialModel(sessionId, took.questions)
+    : ASSISTANT_MODEL;
+
   const giveBack = async () => {
     await db.releaseUsage(c.env.DB, held.id);
     await undoTake(c.env.DB, sessionId, estimate, escalation, opened);
@@ -774,7 +819,7 @@ assistant.post("/proxy/assistant", async (c) => {
         "x-api-key": c.env.ANTHROPIC_API_KEY,
         "anthropic-version": ANTHROPIC_VERSION,
       },
-      body: JSON.stringify(upstreamBody(asked)),
+      body: JSON.stringify(upstreamBody(asked, model)),
     });
   } catch {
     await giveBack();
@@ -832,6 +877,7 @@ assistant.post("/proxy/assistant", async (c) => {
         session_id: sessionId,
         stop_reason: out.stopReason,
         escalating: next !== null,
+        model,
         cost_microusd: cost,
         ...out.usage,
       });

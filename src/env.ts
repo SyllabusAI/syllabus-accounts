@@ -56,6 +56,13 @@ export type Bindings = {
   /** Secret: the summary key the proxy spends. `wrangler secret put ANTHROPIC_API_KEY`. */
   ANTHROPIC_API_KEY: string;
   /**
+   * Secret, OPTIONAL: comma-separated account emails whose study assistant
+   * alternates between Sonnet 5 and Sonnet 5.5, question by question, for a
+   * side-by-side. `wrangler secret put ASSISTANT_TRIAL_ACCOUNTS`; delete it to
+   * end the trial. Unset means everyone is on ASSISTANT_MODEL.
+   */
+  ASSISTANT_TRIAL_ACCOUNTS?: string;
+  /**
    * Which Stripe price is which tier. Vars, not secrets: a price id is public
    * and appears in a Checkout URL. They are configuration rather than a table
    * in src/tiers.ts because test mode and live mode have different ids, so a
