@@ -29,7 +29,7 @@ import { stripeHooks } from "./stripe";
 import { drive } from "./drive";
 import { sweepDriveGrants } from "./drive-keys";
 import { bodyCap, securityHeaders } from "./headers";
-import { sessionMiddleware } from "./session";
+import { crossSiteGuard, sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
 import { log } from "./log";
 
@@ -86,6 +86,10 @@ app.use("*", async (c, next) => {
   }
   return sessionMiddleware(c, next);
 });
+
+// After the auth middleware, which is what says whether a cookie signed this
+// request in; before every route, so none can forget to check (session.ts).
+app.use("*", crossSiteGuard);
 
 app.get("/healthz", (c) => c.json({ ok: true }));
 app.get("/privacy", (c) => c.html(privacyPage()));

@@ -125,6 +125,38 @@ export function sameOrigin(c: Context<AppEnv>): boolean {
 }
 
 /**
+ * A backstop under every cookie-authenticated route that changes something.
+ *
+ * Each such route already calls sameOrigin() itself. This runs once, before
+ * any of them, so that a route added later and written without the call is
+ * still closed to another site, and so that the browser's own statement of
+ * where a request came from (Sec-Fetch-Site) is consulted as well as the
+ * Origin it sent. Either is enough to refuse.
+ *
+ * It only looks at requests the session cookie authenticated. A bearer token
+ * is not something a browser attaches by itself, so a request carrying one
+ * has no cross-site form to worry about, and the Mac's own calls (which send
+ * no Origin at all) are left alone. GET, HEAD and OPTIONS are untouched:
+ * nothing reachable by them changes state except through the routes that
+ * guard themselves (GET /logout, the OAuth callback).
+ *
+ * Sec-Fetch-Site is absent from older browsers and from tools like curl; an
+ * absent header falls back to the Origin/Referer check alone. When present, a
+ * state-changing request must say same-origin: same-site (a sibling
+ * subdomain, such as a panel host) is refused too.
+ */
+export const crossSiteGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const method = c.req.method;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+  if (c.get("authKind") !== "session") return next();
+  const site = c.req.header("Sec-Fetch-Site");
+  if ((site !== undefined && site !== "same-origin") || !sameOrigin(c)) {
+    return c.json({ error: "cross_origin" }, 403);
+  }
+  return next();
+};
+
+/**
  * Refuses a panel's device token on a route only a person should reach.
  *
  * Administering the account is not something a panel does on its owner's

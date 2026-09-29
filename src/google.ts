@@ -25,6 +25,7 @@ import type { AppEnv } from "./env";
 import { page } from "./pages";
 import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
 import { log } from "./log";
+import { countCookie } from "./panel-host";
 import { clearSession, sameOrigin, sessionSecret, setSession } from "./session";
 import { fromBase64Url, randomId, toBase64Url } from "./util";
 
@@ -149,7 +150,12 @@ google.get("/login", async (c) => {
 google.get(CALLBACK_PATH, async (c) => {
   const wait = await overLimit(c, `callback:${clientAddress(c)}`, LIMITS.callback);
   if (wait !== null) return limitedPage(c, wait);
-  const raw = await getSignedCookie(c, sessionSecret(c), FLOW_COOKIE);
+  // Two cookies of this name mean one was planted from another host of this
+  // site (a panel host on a sibling subdomain, say) with a Domain attribute.
+  // It could be a sign-in the attacker started, which would sign this browser
+  // in as the attacker's account, so neither is trusted (as in session.ts).
+  const planted = countCookie(c.req.header("Cookie") ?? "", FLOW_COOKIE) > 1;
+  const raw = planted ? undefined : await getSignedCookie(c, sessionSecret(c), FLOW_COOKIE);
   let flow: Flow | null = null;
   try {
     flow = raw ? (JSON.parse(raw) as Flow) : null;

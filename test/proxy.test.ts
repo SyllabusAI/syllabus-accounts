@@ -135,7 +135,9 @@ describe("who may call the proxy", () => {
 
   it("turns away a browser session on the paid endpoints but not on usage", async () => {
     const { cookie } = await claimDevice("browser@example.com");
-    const summarized = await postJson("/proxy/summarize", { transcript: "words" }, { Cookie: cookie });
+    // From this site's own page: a POST with a cookie and no Origin is refused
+    // earlier still, by crossSiteGuard (test/csrf.test.ts).
+    const summarized = await postJson("/proxy/summarize", { transcript: "words" }, { Cookie: cookie, Origin: ORIGIN });
     expect(summarized.status).toBe(401);
     expect((await summarized.json() as { error: string }).error).toBe("not_a_device");
     const usage = await get("/proxy/usage", { Cookie: cookie });
