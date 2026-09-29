@@ -75,7 +75,18 @@ export const CHUNK_BYTES = 256 * 1024;
 /** Request headers worth carrying to the panel. Cookies never are. */
 export const REQUEST_HEADERS = ["content-type", "accept", "accept-language", "if-none-match", "if-modified-since"];
 /** Response headers worth carrying back. */
-const RESPONSE_HEADERS = new Set(["content-type", "cache-control", "etag", "last-modified", "location", "vary", "content-language"]);
+const RESPONSE_HEADERS = new Set([
+  "content-type",
+  "cache-control",
+  "etag",
+  "last-modified",
+  "location",
+  "vary",
+  "content-language",
+  // The panel's own policy (nonce-based, written by the panel for its own
+  // pages). The panel host adds its own on top; the browser enforces both.
+  "content-security-policy",
+]);
 
 export type ReqFrame = {
   t: "req";

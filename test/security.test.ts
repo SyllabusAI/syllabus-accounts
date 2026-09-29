@@ -3,7 +3,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decrypt, encrypt, keyId, sealedKeyId } from "../src/crypto";
 import { openGrant, sweepDriveGrants, unseal } from "../src/drive-keys";
-import { PAGE_CSP } from "../src/headers";
+import { pagePolicy } from "../src/headers";
 import { scheduled } from "../src/index";
 import { LIMITS, type Limit } from "../src/limits";
 import { safeNext } from "../src/google";
@@ -229,9 +229,10 @@ describe("rate limits on the routes that answer strangers", () => {
 describe("security headers", () => {
   it("puts a strict policy on the pages this Worker writes", async () => {
     const res = await get("/");
-    expect(res.headers.get("Content-Security-Policy")).toBe(PAGE_CSP);
-    expect(PAGE_CSP).toContain("frame-ancestors 'none'");
-    expect(PAGE_CSP).not.toContain("script-src");
+    const policy = await pagePolicy();
+    expect(res.headers.get("Content-Security-Policy")).toBe(policy);
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).toContain("script-src 'none'");
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
