@@ -114,7 +114,7 @@ describe("PKCE on both Google flows", () => {
 
   it("refuses a sign-in flow that carries no verifier", async () => {
     const flow = { state: "s1", nonce: "n1", next: "/", t: Date.now() };
-    const cookie = (await serializeSigned("syllabus_accounts_signin", JSON.stringify(flow), env.SESSION_SECRET, { path: "/" })).split(";")[0];
+    const cookie = (await serializeSigned("__Host-syllabus_accounts_signin", JSON.stringify(flow), env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0];
     const calls = googleAnswers(() => ({}));
     const cb = await get("/oauth2/callback?state=s1&code=c", { Cookie: cookie });
     expect(cb.status).toBe(400);
@@ -128,7 +128,7 @@ describe("signing out", () => {
     for (const site of [undefined, "cross-site", "same-site"]) {
       const res = await get("/logout", { Cookie: cookie, ...(site ? { "Sec-Fetch-Site": site } : {}) });
       expect(res.status).toBe(200);
-      expect(res.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=;");
+      expect(res.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=;");
       expect(await res.text()).toContain('action="/logout"');
     }
   });
@@ -136,16 +136,16 @@ describe("signing out", () => {
     const { cookie } = await signedInAs("so@example.com");
     for (const site of ["same-origin", "none"]) {
       const res = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": site });
-      expect(res.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
+      expect(res.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=;");
     }
   });
   it("needs a same-origin form post", async () => {
     const { cookie } = await signedInAs("so@example.com");
     const bad = await postForm("/logout", {}, { Cookie: cookie, Origin: "https://evil.test" });
     expect(bad.status).toBe(403);
-    expect(bad.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=;");
+    expect(bad.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=;");
     const good = await postForm("/logout", {}, { Cookie: cookie });
-    expect(good.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
+    expect(good.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=;");
   });
 });
 

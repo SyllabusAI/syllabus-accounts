@@ -30,7 +30,7 @@ import { drive } from "./drive";
 import { sweepDriveGrants } from "./drive-keys";
 import { bodyCap, securityHeaders } from "./headers";
 import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
-import { sessionMiddleware } from "./session";
+import { crossSiteGuard, sessionMiddleware } from "./session";
 import { DEVICE_TOKEN_PREFIX, sha256Hex } from "./util";
 import { log } from "./log";
 
@@ -93,6 +93,10 @@ app.use("*", async (c, next) => {
   }
   return sessionMiddleware(c, next);
 });
+
+// After the auth middleware, which is what says whether a cookie signed this
+// request in; before every route, so none can forget to check (session.ts).
+app.use("*", crossSiteGuard);
 
 // The floor under every signed-in route: one counter per device (a panel's
 // bearer) or per account (a browser's cookie), whatever the route, so a route

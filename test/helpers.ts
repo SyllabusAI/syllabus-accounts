@@ -29,7 +29,7 @@ export async function signedInAs(email: string, sub = "sub-" + email) {
     SESSION_COOKIE,
     JSON.stringify({ a: account.id, t: Date.now() }),
     env.SESSION_SECRET,
-    { path: "/" },
+    { path: "/", secure: true },
   );
   return { account, cookie: cookie.split(";")[0] };
 }
