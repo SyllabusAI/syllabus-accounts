@@ -142,7 +142,10 @@ describe("the sign-in routes", () => {
 
     const terms = await (await get("/terms")).text();
     expect(terms).not.toContain("free of charge");
-    for (const phrase of ["Main Course Media LLC", "State of Texas", "18 or older", "renews every month"]) {
+    // The app no longer asks for a permission click before recording, so the
+    // terms are the one place the person takes that responsibility on.
+    for (const phrase of ["Main Course Media LLC", "State of Texas", "18 or older", "renews every month",
+      "does not ask for, collect, or", "entirely your", "without their permission"]) {
       expect(terms).toContain(phrase);
     }
     // The prices on the terms are the ones Checkout sells, not a second copy.

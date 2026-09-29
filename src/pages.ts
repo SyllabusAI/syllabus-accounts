@@ -150,14 +150,19 @@ export function termsPage(): string {
      <h2>Who can use it</h2>
      <p>You must be 18 or older and able to enter a binding agreement. One account is for one person.</p>
      <h2>Your recordings are your responsibility</h2>
-     <p>Syllabus is for recording and studying lectures you attend. You may record only where you are allowed to. That
-        means following your school's rules, your instructor's wishes, and every law that applies to recording where you
-        are, including any that require everyone present to consent. Do not use Syllabus to record private
+     <p>Syllabus is for recording and studying lectures you attend. <strong>Syllabus does not ask for, collect, or
+        confirm permission from anyone you record, and neither do we.</strong> Getting that permission is entirely your
+        responsibility, and so is any legal consequence of recording without it.</p>
+     <p>Each time you record, you are telling us that you have every permission the recording needs: from your
+        instructor, from anyone else who can be heard, and under your school's rules and every law that applies where
+        you record, including laws that require everyone present to consent. Do not use Syllabus to record private
         conversations, or to copy, share, or sell course material you have no right to.</p>
+     <p>We do not review, monitor, or control what you record, and we are not a party to any recording you make.</p>
      <p>You keep all rights to your recordings, transcripts, and notes. You give us only the permission needed to
         transcribe and summarize them for you, as the <a href="/privacy">privacy page</a> describes.</p>
      <p>You agree to defend and repay Main Course Media LLC for any claim, loss, or cost, including reasonable legal
-        fees, that comes from what you record or how you use Syllabus in breach of these terms.</p>
+        fees, that comes from what you record, from recording anyone without their permission, or from using Syllabus
+        in breach of these terms.</p>
      <h2>Plans, trial, and billing</h2>
      <ul>${plans}</ul>
      <ul>
