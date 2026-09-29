@@ -16,7 +16,7 @@ import {
 import type { ReqFrame, ResFrame, WelcomeFrame } from "../src/panel-relay";
 import { SESSION_COOKIE, setSession } from "../src/session";
 import { fromBase64Url, toBase64 } from "../src/util";
-import { claimDevice, ORIGIN, signedInAs } from "./helpers";
+import { claimDevice, get, ORIGIN, signedInAs } from "./helpers";
 
 const PANEL = "https://panels.example";
 const text = (s: string) => toBase64(new TextEncoder().encode(s));
@@ -36,7 +36,7 @@ async function call(url: string, init: RequestInit = {}, panel: string = PANEL):
 }
 
 /** Open the panel's socket the way intake/relay.py does, answering every request with what it saw. */
-async function connectPanel(token: string) {
+async function connectPanel(token: string, extraHeaders: Record<string, string> = {}) {
   const res = await SELF.fetch(ORIGIN + "/relay/connect", { headers: { Upgrade: "websocket", Authorization: "Bearer " + token } });
   expect(res.status).toBe(101);
   const ws = res.webSocket!;
@@ -52,7 +52,7 @@ async function connectPanel(token: string) {
         t: "res",
         id: frame.id,
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...extraHeaders },
         body: text(JSON.stringify({ path: frame.path, query: frame.query, viewer: frame.viewer, base: frame.base })),
       };
       ws.send(JSON.stringify(reply));
@@ -292,7 +292,7 @@ describe("the ticket", () => {
     const [payload, mac] = real.split(".");
     const claims = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
     const altered = btoa(JSON.stringify({ ...claims, a: mine.account.id, d: mine.deviceId })).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const session = (await serializeSigned(SESSION_COOKIE, JSON.stringify({ a: mine.account.id, t: Date.now() }), env.SESSION_SECRET)).split(";")[0].split("=").slice(1).join("=");
+    const session = (await serializeSigned(SESSION_COOKIE, JSON.stringify({ a: mine.account.id, t: Date.now() }), env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0].split("=").slice(1).join("=");
     const attempts = [
       "",
       "garbage",
@@ -321,6 +321,29 @@ describe("the ticket", () => {
 });
 
 describe("the panel host", () => {
+  it("keeps a policy the panel sends, adds its own beside it, and drops other headers", async () => {
+    const mine = await claimDevice("csp-panel@example.com", "My Mac");
+    const panelPolicy = "default-src 'none'; script-src 'nonce-abc'; connect-src 'self'";
+    const { close } = await connectPanel(mine.token, { "Content-Security-Policy": panelPolicy, "X-Internal": "hide me" });
+    const { cookie } = await panelCookieFor(mine);
+    const res = await call(`${PANEL}/p/${mine.deviceId}/api/status`, { headers: { Cookie: cookie } });
+    expect(res.status).toBe(200);
+    // Both policies reach the browser, which enforces each; neither replaces the other.
+    expect(res.headers.get("Content-Security-Policy")).toBe(`${panelPolicy}, ${PANEL_CSP}`);
+    expect(res.headers.get("X-Internal")).toBeNull();
+    await close();
+  });
+
+  it("keeps a policy the panel sends when the panel is reached on the account host", async () => {
+    const mine = await claimDevice("csp-panel2@example.com", "My Mac");
+    const panelPolicy = "default-src 'none'; script-src 'nonce-xyz'";
+    const { close } = await connectPanel(mine.token, { "Content-Security-Policy": panelPolicy });
+    const res = await get(`/p/${mine.deviceId}/api/status`, { Cookie: mine.cookie });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Security-Policy")).toBe(panelPolicy);
+    await close();
+  });
+
   it("relays for the viewer its cookie names, with the panel's headers", async () => {
     const mine = await claimDevice("me@example.com", "My Mac");
     const { seen, close } = await connectPanel(mine.token);
@@ -443,7 +466,7 @@ describe("the account session cookie", () => {
   it("is host-only, so it never reaches a panel host", async () => {
     const app = new Hono<AppEnv>();
     app.get("/", async (c) => {
-      await setSession(c, "acct-1");
+      await setSession(c, { id: "acct-1", session_version: 0 });
       return c.text("ok");
     });
     const res = await app.request("/", {}, { ...(env as unknown as Bindings), PUBLIC_URL: ORIGIN });

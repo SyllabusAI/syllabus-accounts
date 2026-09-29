@@ -6,7 +6,7 @@ import type { Account, Device } from "./env";
 import { SELLABLE, TIERS, TOPUP, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { escapeHtml as h, panelUrl } from "./util";
 
-const STYLE = `
+export const STYLE = `
   :root { color-scheme: light dark; }
   body { font: 16px/1.5 system-ui, sans-serif; max-width: 34em; margin: 4em auto; padding: 0 1.5em; }
   h1 { font-size: 1.4em; margin-bottom: 0.2em; }
@@ -23,6 +23,13 @@ const STYLE = `
   button.danger { background: #b91c1c; color: white; border-color: transparent; }
   section.danger { margin-top: 3em; padding-top: 1em; border-top: 1px solid #8884; }
   label { display: block; margin: 1em 0 0.3em; }
+  .foot { margin-top: 3em; }
+  .lead { margin-top: 1.5em; }
+  .nowrap { white-space: nowrap; }
+  .inline { display: inline; }
+  .flex { display: flex; gap: 0.6em; flex-wrap: wrap; }
+  form.row.tight { margin: 0.4em 0; }
+  code.plain { font-size: 1em; letter-spacing: 0; }
 `;
 
 export function page(title: string, body: string): string {
@@ -32,7 +39,7 @@ export function page(title: string, body: string): string {
 <body><h1>${h(title)}</h1>${body}</body></html>`;
 }
 
-const FOOTER = `<p class="muted" style="margin-top:3em"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/SyllabusAI/LectureAI">Syllabus on GitHub</a></p>`;
+const FOOTER = `<p class="muted foot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/SyllabusAI/LectureAI">Syllabus on GitHub</a></p>`;
 
 export function landing(): string {
   return page(
@@ -404,7 +411,7 @@ export function accountPage(
     ? devices
         .map(
           (d) => `<tr><td><strong>${h(d.name)}</strong><br><span class="muted">${h(d.profile)}, added ${when(d.created_at)}</span>${publicUrl ? relayLine(d, relays[d.id], publicUrl) : ""}</td>
-                  <td class="muted" style="white-space:nowrap">last seen ${when(d.last_seen_at)}</td>
+                  <td class="muted nowrap">last seen ${when(d.last_seen_at)}</td>
                   <td><form method="post" action="/devices/${h(d.id)}/revoke"><button>Remove</button></form></td></tr>`,
         )
         .join("")
@@ -412,7 +419,7 @@ export function accountPage(
   return page(
     "Your Syllabus account",
     `${billingNotice(notice)}<p>Signed in as <strong>${h(account.email)}</strong>${account.name ? ` (${h(account.name)})` : ""}.
-        <form method="post" action="/logout" style="display:inline"><button>Sign out</button></form></p>
+        <form method="post" action="/logout" class="inline"><button>Sign out</button></form></p>
      <h2>Your Macs</h2>
      <p class="muted">Each Mac's panel has an address here that only you can open, from any browser or phone, whenever that Mac is awake and its panel is running. A Mac that goes 90 days without using Syllabus is signed out and can sign in again from its Setup page.</p>
      <table><tbody>${rows}</tbody></table>
@@ -458,7 +465,7 @@ export function deleteAccountPage(account: Account, summary: DeletionSummary, er
         later with the same Google account starts a new, empty account without a free trial.</p>
      <form method="post" action="/account/delete">
        <label for="confirm_email">Type <strong>${h(account.email)}</strong> to confirm</label>
-       <div class="row" style="display:flex;gap:0.6em;flex-wrap:wrap">
+       <div class="flex">
          <input id="confirm_email" name="confirm_email" type="email" autocomplete="off" autocapitalize="off" spellcheck="false" required>
          <button class="danger">Delete my account</button>
        </div>
@@ -546,13 +553,13 @@ function billingSection(view: BillingView | null): string {
 
   const sub = view.subscription;
   const manage = view.hasCustomer
-    ? `<form method="post" action="/billing/portal" style="display:inline"><button>Manage billing</button></form>`
+    ? `<form method="post" action="/billing/portal" class="inline"><button>Manage billing</button></form>`
     : "";
   // Offered when the hours are gone, which is the only moment it is the right
   // answer. A cap is a hard stop, so this is the way past one, and it is one
   // click rather than a bill that arrives later.
   const topUp = view.canTopUp && left <= 0
-    ? `<p><form method="post" action="/billing/topup" style="display:inline"><button class="primary">Add ${TOPUP.audio_hours} hours for $${TOPUP.price_usd}</button></form>
+    ? `<p><form method="post" action="/billing/topup" class="inline"><button class="primary">Add ${TOPUP.audio_hours} hours for $${TOPUP.price_usd}</button></form>
        <span class="muted">A one-time payment. These hours are for this month.</span></p>`
     : "";
 
@@ -620,7 +627,7 @@ function tierName(tier: string): string {
  */
 function redeemForm(): string {
   const options = SELLABLE.map((t) => `<option value="${h(t.tier)}">${h(t.label)}</option>`).join("");
-  return `<p class="muted" style="margin-top:1.5em">Have a code from us?</p>
+  return `<p class="muted lead">Have a code from us?</p>
     <form method="post" action="/billing/checkout" class="row">
       <input type="hidden" name="redeem" value="1">
       <select name="tier">${options}</select>
@@ -630,7 +637,7 @@ function redeemForm(): string {
 
 function tierButtons(): string {
   return SELLABLE.map(
-    (t) => `<form method="post" action="/billing/checkout" class="row" style="margin:0.4em 0">
+    (t) => `<form method="post" action="/billing/checkout" class="row tight">
         <input type="hidden" name="tier" value="${h(t.tier)}">
         <button class="primary">Choose ${h(t.label)}</button>
         <span class="muted">${h(t.note)}</span>
@@ -674,14 +681,14 @@ function onDate(iso: string): string {
  * more while you work, so this ends every connection in one go.
  */
 const signOutEverything = `<p class="muted">Lost a Mac, or think someone else has a copy of its connection?
-  <form method="post" action="/devices/revoke-all" style="display:inline"><button>Sign out every Mac</button></form>
+  <form method="post" action="/devices/revoke-all" class="inline"><button>Sign out every Mac</button></form>
   Each one asks for a new code the next time you open it.</p>`;
 
 function driveSection(grant: DriveGrant | null): string {
   if (grant && !grant.revoked_at) {
     return `<p><span class="ok">Connected</span> as <strong>${h(grant.google_email || "your Google account")}</strong> since ${when(grant.granted_at)}.
       Every Mac on this account files to that Drive.
-      <form method="post" action="/drive/disconnect" style="display:inline"><button>Disconnect</button></form></p>`;
+      <form method="post" action="/drive/disconnect" class="inline"><button>Disconnect</button></form></p>`;
   }
   const why = grant?.revoked_at ? `<p class="warn">The earlier connection stopped working: ${h(grant.revoked_reason || "it was revoked")}.</p>` : "";
   return `${why}<p class="muted">Connect once, and every Mac signed in to this account files its notes to your Drive. Syllabus only sees files it created.</p>
@@ -693,7 +700,7 @@ export function notYoursPage(email: string): string {
   return page(
     "Not yours",
     `<p>That Syllabus belongs to someone else. You are signed in as <strong>${h(email)}</strong>.</p>
-     <p><form method="post" action="/logout" style="display:inline"><button>Use a different account</button></form></p>`,
+     <p><form method="post" action="/logout" class="inline"><button>Use a different account</button></form></p>`,
   );
 }
 
@@ -706,7 +713,7 @@ export function panelNotConnectedPage(deviceName: string, lastConnected: string,
   const name = deviceName || "That Mac";
   const since = lastConnected ? `<p class="muted">Last connected ${when(lastConnected)}.</p>` : "";
   const how = everConnected
-    ? `<p>Syllabus reaches this address on its own whenever its panel is running and the Mac is awake and online. Wake the Mac, or check <code style="font-size:1em;letter-spacing:0">intake service status</code> there.</p>`
+    ? `<p>Syllabus reaches this address on its own whenever its panel is running and the Mac is awake and online. Wake the Mac, or check <code class="plain">intake service status</code> there.</p>`
     : `<p>Syllabus has not connected from that Mac yet. It does so on its own once the panel is running and the Mac is signed in to your account.</p>`;
   return page(
     `${h(name)} is not connected`,

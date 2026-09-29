@@ -25,14 +25,14 @@ import type { AppEnv } from "./env";
 import { page } from "./pages";
 import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
 import { log } from "./log";
-import { clearSession, sameOrigin, sessionSecret, setSession } from "./session";
+import { countCookie } from "./panel-host";
+import { clearHostCookie, clearSession, cookieSecure, FLOW_COOKIE, hostCookieName, sameOrigin, sessionSecret, setSession } from "./session";
 import { fromBase64Url, randomId, toBase64Url } from "./util";
 
 export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const CALLBACK_PATH = "/oauth2/callback";
 
-const FLOW_COOKIE = "syllabus_accounts_signin";
 const FLOW_SECONDS = 600;
 
 export type Flow = {
@@ -125,10 +125,10 @@ google.get("/login", async (c) => {
     t: Date.now(),
     verifier: pkce.verifier,
   };
-  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), sessionSecret(c), {
+  await setSignedCookie(c, hostCookieName(c.env, FLOW_COOKIE), JSON.stringify(flow), sessionSecret(c), {
     path: "/",
     httpOnly: true,
-    secure: c.env.PUBLIC_URL.startsWith("https://"),
+    secure: cookieSecure(c.env),
     sameSite: "Lax",
     maxAge: FLOW_SECONDS,
   });
@@ -149,7 +149,13 @@ google.get("/login", async (c) => {
 google.get(CALLBACK_PATH, async (c) => {
   const wait = await overLimit(c, `callback:${clientAddress(c)}`, LIMITS.callback);
   if (wait !== null) return limitedPage(c, wait);
-  const raw = await getSignedCookie(c, sessionSecret(c), FLOW_COOKIE);
+  // Two cookies of this name mean one was planted from another host of this
+  // site (a panel host on a sibling subdomain, say) with a Domain attribute.
+  // It could be a sign-in the attacker started, which would sign this browser
+  // in as the attacker's account, so neither is trusted (as in session.ts).
+  const flowName = hostCookieName(c.env, FLOW_COOKIE);
+  const planted = countCookie(c.req.header("Cookie") ?? "", flowName) > 1;
+  const raw = planted ? undefined : await getSignedCookie(c, sessionSecret(c), flowName);
   let flow: Flow | null = null;
   try {
     flow = raw ? (JSON.parse(raw) as Flow) : null;
@@ -169,7 +175,7 @@ google.get(CALLBACK_PATH, async (c) => {
     return c.html(page("Sign in", "<p>Google sent no code back.</p><p><a href='/login'>Try again</a></p>"), 400);
   }
   if (flow.kind === "drive") {
-    deleteCookie(c, FLOW_COOKIE, { path: "/" });
+    clearHostCookie(c, FLOW_COOKIE);
     return finishConnect(c, flow, code);
   }
 
@@ -206,14 +212,14 @@ google.get(CALLBACK_PATH, async (c) => {
   // A Google identity that deleted an account after its trial gets no second one.
   await applyTrialBlock(c.env, account.id, claims.sub);
   log(`signed in: account ${account.id}`);
-  deleteCookie(c, FLOW_COOKIE, { path: "/" });
-  await setSession(c, account.id);
+  clearHostCookie(c, FLOW_COOKIE);
+  await setSession(c, account);
   return c.redirect(flow.next);
 });
 
 function signOut(c: Context<AppEnv>) {
   clearSession(c);
-  deleteCookie(c, FLOW_COOKIE, { path: "/" });
+  clearHostCookie(c, FLOW_COOKIE);
   return c.html(page("Signed out", "<p>You are signed out.</p><p><a href='/login'>Sign in</a></p>"));
 }
 

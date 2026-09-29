@@ -72,7 +72,7 @@ describe("the sign-in routes", () => {
     expect(to.searchParams.get("client_id")).toBe(CLIENT);
     expect(to.searchParams.get("redirect_uri")).toBe("https://accounts.test/oauth2/callback");
     expect(to.searchParams.get("scope")).toBe("openid email profile");
-    expect(res.headers.get("Set-Cookie")).toContain("syllabus_accounts_signin=");
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_signin=");
   });
 
   it("refuses a callback that did not start here", async () => {
@@ -98,7 +98,7 @@ describe("the sign-in routes", () => {
     expect(sent.get("code")).toBe("good");
     expect(sent.get("client_secret")).toBe("test-client-secret");
     expect(sent.get("redirect_uri")).toBe("https://accounts.test/oauth2/callback");
-    const session = cb.headers.get("Set-Cookie")!.split(",").find((c: string) => c.includes("syllabus_accounts_session="))!;
+    const session = cb.headers.get("Set-Cookie")!.split(",").find((c: string) => c.includes("__Host-syllabus_accounts_session="))!;
     const html = await (await get("/", { Cookie: session.split(";")[0] })).text();
     expect(html).toContain("me@example.com");
   });
@@ -110,7 +110,7 @@ describe("the sign-in routes", () => {
     googleAnswers(400, { error: "invalid_grant" });
     const cb = await get(`/oauth2/callback?state=${state}&code=bad`, { Cookie: flowCookie });
     expect(cb.status).toBe(502);
-    expect(cb.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=");
+    expect(cb.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=");
   });
 
   it("shows the landing page to nobody and the account page to someone", async () => {
@@ -156,6 +156,6 @@ describe("the sign-in routes", () => {
     const { cookie } = await signedInAs("me@example.com");
     const res = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-origin" });
     expect(res.status).toBe(200);
-    expect(res.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
+    expect(res.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=;");
   });
 });

@@ -3,8 +3,8 @@
  *
  * Headers. Every response gets nosniff, a Referrer-Policy, a refusal to be
  * framed, and (on https) HSTS. The pages this Worker writes itself also get a
- * Content-Security-Policy: they have no script at all and one inline
- * stylesheet, so the policy says exactly that. A relayed panel page
+ * Content-Security-Policy (pagePolicy below): they have no script at all and
+ * one inline stylesheet, so the policy says exactly that. A relayed panel page
  * (/p/<device>/...) is the panel's own HTML with its own inline scripts, so
  * it gets the headers that cannot break it and not this policy.
  *
@@ -22,17 +22,45 @@
 import type { MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "./env";
+import { STYLE } from "./pages";
 import { PANEL_PREFIX } from "./util";
 
 export const BODY_LIMIT = 512 * 1024;
 
-export const PAGE_CSP = [
-  "default-src 'none'",
-  "style-src 'unsafe-inline'",
-  "img-src 'self' data:",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-].join("; ");
+/**
+ * The policy for the pages this Worker writes. They run no script at all, so
+ * script-src is 'none' (and so is everything else not named here). Styling is
+ * the one stylesheet in pages.ts, admitted by its hash rather than by
+ * 'unsafe-inline' or a nonce: the sheet is a constant, so its hash is too,
+ * no page carries a style="" attribute or a handler, and a test fails if that
+ * changes. Change the sheet and the hash follows on its own.
+ *
+ * form-action names where the forms end up: this site, and the two Stripe
+ * hosts the billing forms are redirected to (Chrome applies form-action to
+ * the redirect after a post, so 'self' alone would break checkout and the
+ * billing portal). Google sign-in and Drive connect are plain links, which
+ * form-action does not govern.
+ */
+export const FORM_ACTION_HOSTS = ["https://checkout.stripe.com", "https://billing.stripe.com"];
+
+let pageCsp: Promise<string> | undefined;
+
+export function pagePolicy(): Promise<string> {
+  pageCsp ??= (async () => {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(STYLE));
+    const hash = btoa(String.fromCharCode(...new Uint8Array(digest)));
+    return [
+      "default-src 'none'",
+      "script-src 'none'",
+      `style-src 'sha256-${hash}'`,
+      `form-action 'self' ${FORM_ACTION_HOSTS.join(" ")}`,
+      "base-uri 'none'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+    ].join("; ");
+  })();
+  return pageCsp;
+}
 
 const HSTS = "max-age=31536000; includeSubDomains";
 
@@ -53,7 +81,9 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (c.env.PUBLIC_URL.startsWith("https://")) extra.push(["Strict-Transport-Security", HSTS]);
   const type = c.res.headers.get("Content-Type") ?? "";
   if (!relayed && type.startsWith("text/html")) {
-    extra.push(["Content-Security-Policy", PAGE_CSP]);
+    // A handler that set its own policy chose it deliberately; like the
+    // Referrer-Policy above, it is never overwritten.
+    if (!c.res.headers.has("Content-Security-Policy")) extra.push(["Content-Security-Policy", await pagePolicy()]);
     // An account page names a person; a shared computer's back button should not show it.
     if (!c.res.headers.has("Cache-Control")) extra.push(["Cache-Control", "no-store"]);
   }

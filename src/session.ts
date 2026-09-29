@@ -1,11 +1,16 @@
 /**
  * The browser session: a signed cookie naming the account, good for 30 days.
  *
- * The cookie holds nothing but the account id and when it was issued, signed
- * with SESSION_SECRET. It is host-only: no Domain attribute, ever, so it is
- * sent to PUBLIC_URL's host and to no other, including a panel host on a
- * subdomain (panel-host.ts). Nothing is stored server-side per session, so signing
- * out everywhere is a matter of rotating the secret.
+ * The cookie holds the account id, when it was issued, and the account's
+ * session_version at that moment, signed with SESSION_SECRET. It is
+ * host-only: no Domain attribute, ever, so it is sent to PUBLIC_URL's host and
+ * to no other, including a panel host on a subdomain (panel-host.ts).
+ *
+ * Nothing is stored per session. Instead every request compares the cookie's
+ * version with the account row it loads anyway (sessionMiddleware), so
+ * bumping the account's session_version signs out every browser at once with
+ * no extra query. "Sign out every Mac" does that (revokeEverything in db.ts).
+ * A cookie from before versions existed has no "v" and counts as 0.
  */
 
 import type { Context, MiddlewareHandler } from "hono";
@@ -15,10 +20,30 @@ import type { AppEnv } from "./env";
 import { log } from "./log";
 import { countCookie, panelOrigin } from "./panel-host";
 
-export const SESSION_COOKIE = "syllabus_accounts_session";
+/**
+ * Cookie names. Over https the session and sign-in flow cookies carry the
+ * __Host- prefix, which a browser honors only for a cookie that is Secure,
+ * Path=/ and has no Domain attribute, and refuses to let any other host set
+ * (a Domain cookie planted from a sibling subdomain cannot use the name).
+ * Over http (wrangler dev on localhost) the prefix cannot be used, so the
+ * name falls back to one of its own; production is always https.
+ */
+export const SESSION_COOKIE = "__Host-syllabus_accounts_session";
+export const FLOW_COOKIE = "__Host-syllabus_accounts_signin";
+/** The names before the prefix. Never read; expired whenever a browser still sends one. */
+export const LEGACY_COOKIES = ["syllabus_accounts_session", "syllabus_accounts_signin"];
+
+export function cookieSecure(env: { PUBLIC_URL: string }): boolean {
+  return env.PUBLIC_URL.startsWith("https://");
+}
+
+/** The name to use for one of the __Host- cookies above under this PUBLIC_URL. */
+export function hostCookieName(env: { PUBLIC_URL: string }, name: string): string {
+  return cookieSecure(env) ? name : name.replace("__Host-", "") + "_dev";
+}
 export const SESSION_DAYS = 30;
 
-type SessionData = { a: string; t: number };
+type SessionData = { a: string; t: number; v?: number };
 
 /**
  * SESSION_SECRET, or a refusal to go on without one.
@@ -35,19 +60,33 @@ export function sessionSecret(c: Context<AppEnv>): string {
   return secret;
 }
 
-export async function setSession(c: Context<AppEnv>, accountId: string): Promise<void> {
-  const data: SessionData = { a: accountId, t: Date.now() };
-  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), sessionSecret(c), {
+/**
+ * Sign the browser in as `account`. `issuedAt` is for re-issuing a cookie
+ * under a new version without giving it a fresh sign-in time: signedInAt
+ * proves a person was at Google's chooser, and only a sign-in may renew that.
+ */
+export async function setSession(
+  c: Context<AppEnv>,
+  account: { id: string; session_version: number },
+  issuedAt: number = Date.now(),
+): Promise<void> {
+  const data: SessionData = { a: account.id, t: issuedAt, v: account.session_version ?? 0 };
+  await setSignedCookie(c, hostCookieName(c.env, SESSION_COOKIE), JSON.stringify(data), sessionSecret(c), {
     path: "/",
     httpOnly: true,
-    secure: c.env.PUBLIC_URL.startsWith("https://"),
+    secure: cookieSecure(c.env),
     sameSite: "Lax",
     maxAge: SESSION_DAYS * 86400,
   });
 }
 
 export function clearSession(c: Context<AppEnv>): void {
-  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  clearHostCookie(c, SESSION_COOKIE);
+}
+
+/** Expire one of the __Host- cookies. The prefix needs Secure and Path=/ on the expiry too. */
+export function clearHostCookie(c: Context<AppEnv>, name: string): void {
+  deleteCookie(c, hostCookieName(c.env, name), { path: "/", secure: cookieSecure(c.env) });
 }
 
 /** A valid, unexpired session cookie's contents, or null. */
@@ -61,12 +100,14 @@ async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   // this site with a Domain attribute (a panel host that is a sibling
   // subdomain, say, running the panel's own scripts), and which of the two a
   // parser picks is not ours to decide. Neither is trusted.
-  if (countCookie(c.req.header("Cookie") ?? "", SESSION_COOKIE) > 1) return null;
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  const name = hostCookieName(c.env, SESSION_COOKIE);
+  if (countCookie(c.req.header("Cookie") ?? "", name) > 1) return null;
+  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, name);
   if (!raw) return null;
   try {
     const data = JSON.parse(raw) as SessionData;
     if (typeof data.a !== "string" || typeof data.t !== "number") return null;
+    if (data.v !== undefined && !(Number.isInteger(data.v) && data.v >= 0)) return null;
     if (Date.now() - data.t > SESSION_DAYS * 86400 * 1000) return null;
     return data;
   } catch {
@@ -74,9 +115,9 @@ async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   }
 }
 
-/** The account id a valid, unexpired session cookie names, or "". */
-export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
-  return (await readSession(c))?.a ?? "";
+/** Whether a cookie's contents still stand for this account: same id, and not issued before a bump. */
+function currentFor(data: SessionData, account: { id: string; session_version: number }): boolean {
+  return data.a === account.id && (data.v ?? 0) === (account.session_version ?? 0);
 }
 
 /**
@@ -86,19 +127,41 @@ export async function sessionAccountId(c: Context<AppEnv>): Promise<string> {
  * goes through Google's account chooser (prompt=select_account in
  * google.ts), which a person has to click. So a recent value means a person
  * was at Google a moment ago, which no script on this origin can arrange.
+ *
+ * 0 too when the cookie is not the one sessionMiddleware accepted for the
+ * signed-in account (an old version, or no account), so a caller never has to
+ * remember to check both.
  */
 export async function sessionSignedInAt(c: Context<AppEnv>): Promise<number> {
-  return (await readSession(c))?.t ?? 0;
+  const account = c.get("account");
+  const data = await readSession(c);
+  return data && account && c.get("authKind") === "session" && currentFor(data, account) ? data.t : 0;
+}
+
+/**
+ * The cookies from before the __Host- prefix authenticate nothing. A browser
+ * that still sends one is told to drop it on this response, so the one-time
+ * sign-out costs a sign-in and nothing loops. Sent whether or not a new
+ * cookie is present: a request carrying both uses the new one alone.
+ */
+function expireLegacyCookies(c: Context<AppEnv>): void {
+  const header = c.req.header("Cookie") ?? "";
+  for (const old of LEGACY_COOKIES) {
+    if (countCookie(header, old) > 0) deleteCookie(c, old, { path: "/" });
+  }
 }
 
 /** Sets c.var.account from the session cookie; never refuses on its own. */
 export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
+  expireLegacyCookies(c);
   if (c.get("account") === undefined) c.set("account", null);
   if (c.get("device") === undefined) c.set("device", null);
-  const id = await sessionAccountId(c);
-  if (id) {
-    const account = await accountById(c.env.DB, id);
-    if (account) {
+  const data = await readSession(c);
+  if (data) {
+    const account = await accountById(c.env.DB, data.a);
+    // The account row is loaded anyway; its session_version is the whole
+    // cost of being able to revoke a cookie.
+    if (account && currentFor(data, account)) {
       c.set("account", account);
       c.set("authKind", "session");
     }
@@ -123,6 +186,38 @@ export function sameOrigin(c: Context<AppEnv>): boolean {
   if (origin) return origin === c.env.PUBLIC_URL;
   return referer.startsWith(c.env.PUBLIC_URL + "/");
 }
+
+/**
+ * A backstop under every cookie-authenticated route that changes something.
+ *
+ * Each such route already calls sameOrigin() itself. This runs once, before
+ * any of them, so that a route added later and written without the call is
+ * still closed to another site, and so that the browser's own statement of
+ * where a request came from (Sec-Fetch-Site) is consulted as well as the
+ * Origin it sent. Either is enough to refuse.
+ *
+ * It only looks at requests the session cookie authenticated. A bearer token
+ * is not something a browser attaches by itself, so a request carrying one
+ * has no cross-site form to worry about, and the Mac's own calls (which send
+ * no Origin at all) are left alone. GET, HEAD and OPTIONS are untouched:
+ * nothing reachable by them changes state except through the routes that
+ * guard themselves (GET /logout, the OAuth callback).
+ *
+ * Sec-Fetch-Site is absent from older browsers and from tools like curl; an
+ * absent header falls back to the Origin/Referer check alone. When present, a
+ * state-changing request must say same-origin: same-site (a sibling
+ * subdomain, such as a panel host) is refused too.
+ */
+export const crossSiteGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const method = c.req.method;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return next();
+  if (c.get("authKind") !== "session") return next();
+  const site = c.req.header("Sec-Fetch-Site");
+  if ((site !== undefined && site !== "same-origin") || !sameOrigin(c)) {
+    return c.json({ error: "cross_origin" }, 403);
+  }
+  return next();
+};
 
 /**
  * Refuses a panel's device token on a route only a person should reach.
