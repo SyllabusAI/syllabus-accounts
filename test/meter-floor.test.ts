@@ -246,8 +246,8 @@ describe("settling to the provider's duration", () => {
 
 describe("verboseJson", () => {
   it("reads text and duration", () => {
-    expect(verboseJson('{"text":"hi","duration":12.5}')).toEqual({ text: "hi", duration: 12.5 });
-    expect(verboseJson('{"text":"hi","duration":"7"}')).toEqual({ text: "hi", duration: 7 });
+    expect(verboseJson('{"text":"hi","duration":12.5}')).toEqual({ text: "hi", duration: 12.5, segments: null });
+    expect(verboseJson('{"text":"hi","duration":"7"}')).toEqual({ text: "hi", duration: 7, segments: null });
   });
   it("gives no duration for anything that is not a positive number", () => {
     for (const d of ["0", "-1", "null", '"x"', "[]"]) expect(verboseJson(`{"text":"hi","duration":${d}}`)?.duration).toBeNull();
