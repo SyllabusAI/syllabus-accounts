@@ -15,7 +15,27 @@ import type { AppEnv } from "./env";
 import { log } from "./log";
 import { countCookie, panelOrigin } from "./panel-host";
 
-export const SESSION_COOKIE = "syllabus_accounts_session";
+/**
+ * Cookie names. Over https the session and sign-in flow cookies carry the
+ * __Host- prefix, which a browser honors only for a cookie that is Secure,
+ * Path=/ and has no Domain attribute, and refuses to let any other host set
+ * (a Domain cookie planted from a sibling subdomain cannot use the name).
+ * Over http (wrangler dev on localhost) the prefix cannot be used, so the
+ * name falls back to one of its own; production is always https.
+ */
+export const SESSION_COOKIE = "__Host-syllabus_accounts_session";
+export const FLOW_COOKIE = "__Host-syllabus_accounts_signin";
+/** The names before the prefix. Never read; expired whenever a browser still sends one. */
+export const LEGACY_COOKIES = ["syllabus_accounts_session", "syllabus_accounts_signin"];
+
+export function cookieSecure(env: { PUBLIC_URL: string }): boolean {
+  return env.PUBLIC_URL.startsWith("https://");
+}
+
+/** The name to use for one of the __Host- cookies above under this PUBLIC_URL. */
+export function hostCookieName(env: { PUBLIC_URL: string }, name: string): string {
+  return cookieSecure(env) ? name : name.replace("__Host-", "") + "_dev";
+}
 export const SESSION_DAYS = 30;
 
 type SessionData = { a: string; t: number };
@@ -37,17 +57,22 @@ export function sessionSecret(c: Context<AppEnv>): string {
 
 export async function setSession(c: Context<AppEnv>, accountId: string): Promise<void> {
   const data: SessionData = { a: accountId, t: Date.now() };
-  await setSignedCookie(c, SESSION_COOKIE, JSON.stringify(data), sessionSecret(c), {
+  await setSignedCookie(c, hostCookieName(c.env, SESSION_COOKIE), JSON.stringify(data), sessionSecret(c), {
     path: "/",
     httpOnly: true,
-    secure: c.env.PUBLIC_URL.startsWith("https://"),
+    secure: cookieSecure(c.env),
     sameSite: "Lax",
     maxAge: SESSION_DAYS * 86400,
   });
 }
 
 export function clearSession(c: Context<AppEnv>): void {
-  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  clearHostCookie(c, SESSION_COOKIE);
+}
+
+/** Expire one of the __Host- cookies. The prefix needs Secure and Path=/ on the expiry too. */
+export function clearHostCookie(c: Context<AppEnv>, name: string): void {
+  deleteCookie(c, hostCookieName(c.env, name), { path: "/", secure: cookieSecure(c.env) });
 }
 
 /** A valid, unexpired session cookie's contents, or null. */
@@ -61,8 +86,9 @@ async function readSession(c: Context<AppEnv>): Promise<SessionData | null> {
   // this site with a Domain attribute (a panel host that is a sibling
   // subdomain, say, running the panel's own scripts), and which of the two a
   // parser picks is not ours to decide. Neither is trusted.
-  if (countCookie(c.req.header("Cookie") ?? "", SESSION_COOKIE) > 1) return null;
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+  const name = hostCookieName(c.env, SESSION_COOKIE);
+  if (countCookie(c.req.header("Cookie") ?? "", name) > 1) return null;
+  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, name);
   if (!raw) return null;
   try {
     const data = JSON.parse(raw) as SessionData;
@@ -91,8 +117,22 @@ export async function sessionSignedInAt(c: Context<AppEnv>): Promise<number> {
   return (await readSession(c))?.t ?? 0;
 }
 
+/**
+ * The cookies from before the __Host- prefix authenticate nothing. A browser
+ * that still sends one is told to drop it on this response, so the one-time
+ * sign-out costs a sign-in and nothing loops. Sent whether or not a new
+ * cookie is present: a request carrying both uses the new one alone.
+ */
+function expireLegacyCookies(c: Context<AppEnv>): void {
+  const header = c.req.header("Cookie") ?? "";
+  for (const old of LEGACY_COOKIES) {
+    if (countCookie(header, old) > 0) deleteCookie(c, old, { path: "/" });
+  }
+}
+
 /** Sets c.var.account from the session cookie; never refuses on its own. */
 export const sessionMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
+  expireLegacyCookies(c);
   if (c.get("account") === undefined) c.set("account", null);
   if (c.get("device") === undefined) c.set("device", null);
   const id = await sessionAccountId(c);

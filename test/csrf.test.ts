@@ -258,7 +258,7 @@ describe("routes that change state on a GET", () => {
       const res = await get("/logout", { Cookie: cookie, ...(site ? { "Sec-Fetch-Site": site } : {}) });
       expect(res.headers.get("Set-Cookie"), String(site)).toBeNull();
     }
-    expect((await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-origin" })).headers.get("Set-Cookie")).toContain("syllabus_accounts_session=");
+    expect((await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-origin" })).headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=");
   });
 
   it("GET /device only reads, whichever site sent it", async () => {

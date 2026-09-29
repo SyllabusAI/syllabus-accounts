@@ -106,7 +106,7 @@ characters from a 32-letter alphabet (about 10^12), live 15 minutes, at most
 500 pending. Lookups and approvals are limited per account and per address.
 
 **3. Cross-site requests with the session cookie.**
-The cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, host-only. That alone is
+The cookie is `__Host-` prefixed, `HttpOnly`, `Secure`, `SameSite=Lax`, host-only. That alone is
 not the defense: Lax keeps the cookie off a cross-site form POST, but it does
 not stop a request from a sibling host of the same site, and it is a browser
 default some clients do not apply. So every state-changing browser route
@@ -159,11 +159,14 @@ global ceilings. Cloudflare absorbs volumetric floods in front of all of it.
   would have to name Stripe's hosts exactly. Every value on the pages is
   escaped, so the directive would guard against an injection that has no
   known way in.
-- **Cookie names lack the `__Host-` prefix.** Renaming signs everybody out
-  once. The gain is larger than it was: with a panel host on a sibling
-  subdomain, only the prefix stops that host planting a session cookie for a
-  signed-out visitor (CSRF audit, finding 2). Duplicate cookies are refused
-  meanwhile.
+- **The panel cookie lacks the `__Host-` prefix.** The session and sign-in
+  flow cookies have it (CSRF audit, finding 2, closed). The prefix demands
+  `Path=/`, and the panel cookie is deliberately scoped to one device's
+  `/p/<device>` path, so it cannot take the prefix without one cookie name
+  per device. What it would guard is small: a sibling host planting a panel
+  cookie shows the visitor only the panel of a device the attacker owns, on a
+  host that already serves the attacker's own scripts to whoever opens it,
+  and two cookies of the name are refused (`panelViewer`).
 - **An allowance row outlives a cancellation Stripe never delivers.** See the
   README's Billing section.
 - **Per-address limits are coarse on shared networks.** Campus Wi-Fi and
@@ -217,11 +220,18 @@ account: anything the victim then uploads lands in the attacker's Drive. The
 session and panel cookies already refused duplicates; the flow cookie now does
 too (`src/google.ts`).
 
-**Finding 2 (hardening, Low, not fixed here).** The same tossing trick works
-on the session cookie when the victim has no session of their own: a lone
-planted cookie is accepted. The `__Host-` prefix is the complete fix, since a
-browser refuses to let any other host set one. It signs every user out once
-and is a decision for the owners (see Known gaps).
+**Finding 2 (hardening, Low, closed).** The same tossing trick worked on the
+session cookie when the victim had no session of their own: a lone planted
+cookie was accepted. The session and sign-in flow cookies are now
+`__Host-syllabus_accounts_session` and `__Host-syllabus_accounts_signin`: a
+browser accepts a `__Host-` cookie only when it is `Secure`, `Path=/` and has
+no `Domain`, so no other host can set one. The names from before are never
+read and are expired on the next response, so the change signed everyone out
+once. Over `http` (wrangler dev on localhost) the prefix cannot be used and
+the cookies fall back to `syllabus_accounts_session_dev` and
+`syllabus_accounts_signin_dev`; production is always https. Two cookies of
+the new name are still refused. The panel cookie keeps its name; see Known
+gaps.
 
 **Finding 3 (hardening, done).** Every route carried its own `sameOrigin`
 call and nothing else stopped a new route that forgot. `crossSiteGuard` closes

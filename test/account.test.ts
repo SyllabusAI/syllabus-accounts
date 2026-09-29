@@ -241,7 +241,7 @@ describe("who may delete", () => {
         SESSION_COOKIE,
         JSON.stringify({ a: account.id, t: Date.now() - 11 * 60 * 1000 }),
         env.SESSION_SECRET,
-        { path: "/" },
+        { path: "/", secure: true },
       )
     ).split(";")[0];
     const page = await get("/account/delete", { Cookie: stale });
@@ -512,7 +512,7 @@ describe("deleting", () => {
     const res = await confirm(mine.cookie, "tokens@example.com");
     expect(res.status).toBe(200);
     const setCookie = res.headers.get("Set-Cookie") ?? "";
-    expect(setCookie).toContain("syllabus_accounts_session=;");
+    expect(setCookie).toContain("__Host-syllabus_accounts_session=;");
     expect(setCookie).toMatch(/Max-Age=0/i);
 
     for (const token of [mine.token, second.token]) {
@@ -624,7 +624,7 @@ async function googleSignIn(sub: string, email: string): Promise<string> {
   const cb = await get(`/oauth2/callback?state=${to.searchParams.get("state")}&code=ok`, { Cookie: flowCookie });
   vi.unstubAllGlobals();
   expect(cb.status).toBe(302);
-  const session = cb.headers.get("Set-Cookie")!.split(",").find((c) => c.includes("syllabus_accounts_session="))!;
+  const session = cb.headers.get("Set-Cookie")!.split(",").find((c) => c.includes("__Host-syllabus_accounts_session="))!;
   return session.split(";")[0].trim();
 }
 

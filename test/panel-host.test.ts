@@ -292,7 +292,7 @@ describe("the ticket", () => {
     const [payload, mac] = real.split(".");
     const claims = JSON.parse(new TextDecoder().decode(fromBase64Url(payload)));
     const altered = btoa(JSON.stringify({ ...claims, a: mine.account.id, d: mine.deviceId })).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const session = (await serializeSigned(SESSION_COOKIE, JSON.stringify({ a: mine.account.id, t: Date.now() }), env.SESSION_SECRET)).split(";")[0].split("=").slice(1).join("=");
+    const session = (await serializeSigned(SESSION_COOKIE, JSON.stringify({ a: mine.account.id, t: Date.now() }), env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0].split("=").slice(1).join("=");
     const attempts = [
       "",
       "garbage",

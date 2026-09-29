@@ -149,7 +149,7 @@ describe("a form cannot be posted from anywhere but this origin", () => {
     const { cookie } = await signedInAs("csrf-logout@example.com");
     const res = await postForm("/logout", {}, { Cookie: cookie, Origin: "https://evil.test" });
     expect(res.status).toBe(403);
-    expect(res.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=;");
+    expect(res.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=;");
     const sameSite = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": "same-site" });
     expect(sameSite.headers.get("Set-Cookie")).toBeNull();
   });
