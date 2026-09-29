@@ -20,6 +20,7 @@ import { setSignedCookie } from "hono/cookie";
 import * as db from "./db";
 import { openGrant, sealGrant } from "./drive-keys";
 import type { AppEnv, Bindings } from "./env";
+import { LIMITS, limitedJson, overLimit } from "./limits";
 import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, pkcePair, redirectUri, type Flow } from "./google";
 import { page } from "./pages";
 import { browserOnly, sameOrigin, sessionSecret } from "./session";
@@ -124,6 +125,8 @@ drive.post("/drive/token", async (c) => {
   const account = c.get("account");
   const device = c.get("device");
   if (!account || !device) return c.json({ error: "not_a_device" }, 401);
+  const wait = await overLimit(c, `drive-token:${account.id}`, LIMITS.driveToken);
+  if (wait !== null) return limitedJson(c, LIMITS.driveToken, wait);
   const grant = await db.driveGrant(c.env.DB, account.id);
   if (!grant) return c.json({ error: "no_grant" }, 404);
   if (grant.revoked_at) return c.json({ error: "grant_revoked", reason: grant.revoked_reason }, 409);

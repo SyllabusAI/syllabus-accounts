@@ -27,6 +27,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import * as db from "./db";
 import type { Account, AppEnv, Bindings, Device } from "./env";
+import { LIMITS, limitedJson, limitedPage, overLimit } from "./limits";
 import { notYoursPage, page } from "./pages";
 import { handOff, panelOrigin } from "./panel-host";
 import { MAX_BODY_BYTES, REQUEST_HEADERS, type RelayState } from "./panel-relay";
@@ -69,6 +70,8 @@ relay.get("/relay/connect", async (c) => {
   const device = c.get("device");
   if (!device) return c.json({ error: "not_a_device" }, 401);
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected_websocket" }, 426);
+  const wait = await overLimit(c, `relay-connect:${device.id}`, LIMITS.relayConnect);
+  if (wait !== null) return limitedJson(c, LIMITS.relayConnect, wait);
   const headers = new Headers(c.req.raw.headers);
   headers.delete("Authorization");
   headers.set("X-Relay-Op", "connect");
@@ -90,6 +93,16 @@ export function panelRequest(c: Context<AppEnv>, deviceId: string): PanelRequest
   const isApi = rest.startsWith("/api/");
   const isPage = c.req.method === "GET" && !isApi && !rest.startsWith("/static/");
   return { url, base, rest, isApi, isPage };
+}
+
+/**
+ * Counts a relayed panel request against the viewer's account, on either
+ * host, and returns the refusal to send when they are over.
+ */
+export async function relayLimited(c: Context<AppEnv>, account: Account, isApi: boolean): Promise<Response | null> {
+  const wait = await overLimit(c, `relay-view:${account.id}`, LIMITS.relayView);
+  if (wait === null) return null;
+  return isApi ? limitedJson(c, LIMITS.relayView, wait) : limitedPage(c, wait);
 }
 
 /** The device, if it exists and is this account's; otherwise the refusal to send. */
@@ -143,6 +156,9 @@ relay.all("/p/:device/*", async (c) => {
     if (where.isApi) return c.json({ error: "not_found" }, 404);
     return c.html(page("Not found", "<p>The panel has no such page.</p>"), 404);
   }
+
+  const slow = await relayLimited(c, account, where.isApi);
+  if (slow) return slow;
 
   // With a panel host, this host never serves panel content: an owner is
   // handed across with a ticket (panel-host.ts), and nothing is relayed from

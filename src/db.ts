@@ -896,6 +896,13 @@ export async function deleteAccountData(db: D1Database, accountId: string, subHa
     db
       .prepare(`DELETE FROM device_codes WHERE approved_account_id = ? OR approved_device_id IN (${devicesOfAccount})`)
       .bind(accountId, accountId),
+    // Per-device buckets ("device-req:<device id>"), before the devices go.
+    db
+      .prepare(
+        `DELETE FROM rate_limits WHERE EXISTS (
+           SELECT 1 FROM devices d WHERE d.account_id = ? AND substr(bucket, -length(d.id) - 1) = ':' || d.id)`,
+      )
+      .bind(accountId),
     db.prepare("DELETE FROM devices WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM settings WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM drive_grants WHERE account_id = ?").bind(accountId),
