@@ -101,6 +101,13 @@ jobs:
 
       - name: The lecture prompt must match LectureAI's
         run: |
-          curl -fsSL -o /tmp/schemas.py \
-            https://raw.githubusercontent.com/SyllabusAI/LectureAI/main/intake/schemas.py
-          python3 .github/workflows/prompt_parity.py /tmp/schemas.py src/prompts.ts
+          # Compares against LectureAI's main. The untrusted-data paragraphs and the
+          # transcript fence land in both repos in one release; while LectureAI's
+          # main does not have them yet the script warns and skips those checks
+          # rather than failing this PR. Once both have them, any difference fails.
+          for f in schemas assistant summarize; do
+            curl -fsSL -o /tmp/$f.py \
+              https://raw.githubusercontent.com/SyllabusAI/LectureAI/main/intake/$f.py
+          done
+          python3 .github/workflows/prompt_parity.py /tmp/schemas.py src/prompts.ts \
+            /tmp/assistant.py src/assistant.ts /tmp/summarize.py
