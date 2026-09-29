@@ -291,7 +291,13 @@ panelHost.use("*", async (c, next) => {
   c.set("device", null);
   c.set("authKind", null);
   await next();
+  // The panel may send a policy of its own (LectureAI does). Assigning c.res
+  // lays the old response's headers over the new one's, so withPanelHeaders'
+  // policy would lose to the panel's and be dropped; say both afterwards. A
+  // browser enforces every policy it is given, so neither loosens the other.
+  const panelPolicy = c.res.headers.get("Content-Security-Policy");
   c.res = withPanelHeaders(c.res, panelOrigin(c.env) || "");
+  if (panelPolicy) c.res.headers.set("Content-Security-Policy", `${panelPolicy}, ${PANEL_CSP}`);
 });
 
 panelHost.get(`/p/:device/${AUTH_SEGMENT}`, async (c) => {
