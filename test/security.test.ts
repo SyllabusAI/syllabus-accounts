@@ -3,7 +3,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decrypt, encrypt, keyId, sealedKeyId } from "../src/crypto";
 import { openGrant, sweepDriveGrants, unseal } from "../src/drive-keys";
-import { PAGE_CSP } from "../src/headers";
+import { pagePolicy } from "../src/headers";
 import { scheduled } from "../src/index";
 import { LIMITS, type Limit } from "../src/limits";
 import { safeNext } from "../src/google";
@@ -114,7 +114,7 @@ describe("PKCE on both Google flows", () => {
 
   it("refuses a sign-in flow that carries no verifier", async () => {
     const flow = { state: "s1", nonce: "n1", next: "/", t: Date.now() };
-    const cookie = (await serializeSigned("syllabus_accounts_signin", JSON.stringify(flow), env.SESSION_SECRET, { path: "/" })).split(";")[0];
+    const cookie = (await serializeSigned("__Host-syllabus_accounts_signin", JSON.stringify(flow), env.SESSION_SECRET, { path: "/", secure: true })).split(";")[0];
     const calls = googleAnswers(() => ({}));
     const cb = await get("/oauth2/callback?state=s1&code=c", { Cookie: cookie });
     expect(cb.status).toBe(400);
@@ -128,7 +128,7 @@ describe("signing out", () => {
     for (const site of [undefined, "cross-site", "same-site"]) {
       const res = await get("/logout", { Cookie: cookie, ...(site ? { "Sec-Fetch-Site": site } : {}) });
       expect(res.status).toBe(200);
-      expect(res.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=;");
+      expect(res.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=;");
       expect(await res.text()).toContain('action="/logout"');
     }
   });
@@ -136,16 +136,16 @@ describe("signing out", () => {
     const { cookie } = await signedInAs("so@example.com");
     for (const site of ["same-origin", "none"]) {
       const res = await get("/logout", { Cookie: cookie, "Sec-Fetch-Site": site });
-      expect(res.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
+      expect(res.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=;");
     }
   });
   it("needs a same-origin form post", async () => {
     const { cookie } = await signedInAs("so@example.com");
     const bad = await postForm("/logout", {}, { Cookie: cookie, Origin: "https://evil.test" });
     expect(bad.status).toBe(403);
-    expect(bad.headers.get("Set-Cookie") ?? "").not.toContain("syllabus_accounts_session=;");
+    expect(bad.headers.get("Set-Cookie") ?? "").not.toContain("__Host-syllabus_accounts_session=;");
     const good = await postForm("/logout", {}, { Cookie: cookie });
-    expect(good.headers.get("Set-Cookie")).toContain("syllabus_accounts_session=;");
+    expect(good.headers.get("Set-Cookie")).toContain("__Host-syllabus_accounts_session=;");
   });
 });
 
@@ -229,9 +229,10 @@ describe("rate limits on the routes that answer strangers", () => {
 describe("security headers", () => {
   it("puts a strict policy on the pages this Worker writes", async () => {
     const res = await get("/");
-    expect(res.headers.get("Content-Security-Policy")).toBe(PAGE_CSP);
-    expect(PAGE_CSP).toContain("frame-ancestors 'none'");
-    expect(PAGE_CSP).not.toContain("script-src");
+    const policy = await pagePolicy();
+    expect(res.headers.get("Content-Security-Policy")).toBe(policy);
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).toContain("script-src 'none'");
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(res.headers.get("Referrer-Policy")).toBe("same-origin");

@@ -46,6 +46,7 @@ import { trialHash } from "./crypto";
 import * as db from "./db";
 import { revokeGrantAtGoogle } from "./drive";
 import type { Account, AppEnv, Bindings } from "./env";
+import { LIMITS, limitedPage, overLimit } from "./limits";
 import { accountDeletedPage, deleteAccountPage, reauthToDeletePage, type DeletionSummary } from "./pages";
 import { log } from "./log";
 import { forgetRelay } from "./relay";
@@ -113,6 +114,8 @@ account.post("/account/delete", async (c) => {
   if (!who) return c.redirect("/login?next=" + encodeURIComponent("/account/delete"));
   if (!sameOrigin(c)) return c.text("This form must be submitted from " + c.env.PUBLIC_URL, 403);
   if (!(await signedInRecently(c))) return c.html(reauthToDeletePage(who, REAUTH_MINUTES), 403);
+  const wait = await overLimit(c, `account-delete:${who.id}`, LIMITS.accountDelete);
+  if (wait !== null) return limitedPage(c, wait);
 
   const form = await c.req.parseBody();
   const typed = String(form.confirm_email ?? "").trim().toLowerCase();

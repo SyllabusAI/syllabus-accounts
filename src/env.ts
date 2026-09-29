@@ -118,6 +118,11 @@ export type Account = {
   last_signin_at: string;
   /** Bumped to orphan every device token this account has handed out. */
   token_version: number;
+  /**
+   * Bumped to sign out every browser: the session cookie carries the value it
+   * was issued under, and a cookie naming an older one is refused (session.ts).
+   */
+  session_version: number;
 };
 
 export type Device = {

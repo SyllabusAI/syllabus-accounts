@@ -162,6 +162,10 @@ async function rowsNaming(accountId: string, deviceIds: string[]) {
     if (name === "rate_limits") {
       where.push("substr(bucket, -length(?) - 1) = ':' || ?");
       binds.push(accountId, accountId);
+      for (const id of deviceIds) {
+        where.push("substr(bucket, -length(?) - 1) = ':' || ?");
+        binds.push(id, id);
+      }
     }
     if (!where.length) continue;
     checked += 1;
@@ -241,7 +245,7 @@ describe("who may delete", () => {
         SESSION_COOKIE,
         JSON.stringify({ a: account.id, t: Date.now() - 11 * 60 * 1000 }),
         env.SESSION_SECRET,
-        { path: "/" },
+        { path: "/", secure: true },
       )
     ).split(";")[0];
     const page = await get("/account/delete", { Cookie: stale });
@@ -372,7 +376,10 @@ describe("deleting", () => {
     const res = await confirm(mine.cookie, "stuck@example.com");
     expect(res.status).toBe(502);
     expect(await res.text()).toContain("nothing was deleted");
-    expect((await rowsNaming(mine.account.id, deviceIds)).left).toEqual(before.left);
+    // The attempt itself is counted (account-delete), which is a rate_limits row and not account data.
+    const { rate_limits: _counted, ...after } = (await rowsNaming(mine.account.id, deviceIds)).left;
+    const { rate_limits: _was, ...was } = before.left;
+    expect(after).toEqual(was);
     // Stripe came first: Google was not asked to revoke anything.
     expect(calls.some((c) => c.url.includes("oauth2.googleapis.com"))).toBe(false);
     expect((await get("/me", { Authorization: `Bearer ${mine.token}` })).status).toBe(200);
@@ -393,7 +400,10 @@ describe("deleting", () => {
     } finally {
       await env.DB.prepare("ALTER TABLE stripe_events_away RENAME TO stripe_events").run();
     }
-    expect((await rowsNaming(mine.account.id, deviceIds)).left).toEqual(before.left);
+    // The attempt itself is counted (account-delete), which is a rate_limits row and not account data.
+    const { rate_limits: _counted, ...after } = (await rowsNaming(mine.account.id, deviceIds)).left;
+    const { rate_limits: _was, ...was } = before.left;
+    expect(after).toEqual(was);
     expect(await db.trialWasUsed(env.DB, await trialHash(env.SESSION_SECRET, mine.account.google_sub))).toBe(false);
     expect(calls.some((c) => c.url.includes("oauth2.googleapis.com"))).toBe(false);
     expect((await get("/me", { Authorization: `Bearer ${mine.token}` })).status).toBe(200);
@@ -512,7 +522,7 @@ describe("deleting", () => {
     const res = await confirm(mine.cookie, "tokens@example.com");
     expect(res.status).toBe(200);
     const setCookie = res.headers.get("Set-Cookie") ?? "";
-    expect(setCookie).toContain("syllabus_accounts_session=;");
+    expect(setCookie).toContain("__Host-syllabus_accounts_session=;");
     expect(setCookie).toMatch(/Max-Age=0/i);
 
     for (const token of [mine.token, second.token]) {
@@ -624,7 +634,7 @@ async function googleSignIn(sub: string, email: string): Promise<string> {
   const cb = await get(`/oauth2/callback?state=${to.searchParams.get("state")}&code=ok`, { Cookie: flowCookie });
   vi.unstubAllGlobals();
   expect(cb.status).toBe(302);
-  const session = cb.headers.get("Set-Cookie")!.split(",").find((c) => c.includes("syllabus_accounts_session="))!;
+  const session = cb.headers.get("Set-Cookie")!.split(",").find((c) => c.includes("__Host-syllabus_accounts_session="))!;
   return session.split(";")[0].trim();
 }
 
