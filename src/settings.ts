@@ -15,6 +15,7 @@
 import { Hono } from "hono";
 import * as db from "./db";
 import type { AppEnv } from "./env";
+import { LIMITS, limitedJson, overLimit } from "./limits";
 
 export const MAX_CONTENT = 64 * 1024;
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
@@ -42,6 +43,8 @@ settings.put("/settings/:name", async (c) => {
   if (!device || !account) return c.json({ error: "not_a_device" }, 401);
   const name = c.req.param("name");
   if (!NAME.test(name)) return c.json({ error: "invalid_request" }, 400);
+  const wait = await overLimit(c, `settings-write:${account.id}`, LIMITS.settingsWrite);
+  if (wait !== null) return limitedJson(c, LIMITS.settingsWrite, wait);
   const body = (await c.req.json().catch(() => null)) as { content?: unknown; expected_updated_at?: unknown } | null;
   if (!body || typeof body.content !== "string") return c.json({ error: "invalid_request", detail: "content must be a string" }, 400);
   if (body.content.length > MAX_CONTENT) return c.json({ error: "too_large", limit: MAX_CONTENT }, 413);

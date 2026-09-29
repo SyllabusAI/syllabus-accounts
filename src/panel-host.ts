@@ -41,9 +41,10 @@ import { Hono } from "hono";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import * as db from "./db";
 import type { Account, AppEnv, Bindings } from "./env";
+import { clientAddress, LIMITS, limitedPage, overLimit } from "./limits";
 import { page } from "./pages";
 import { log } from "./log";
-import { forward, ownedDevice, panelRequest, relayAllowed } from "./relay";
+import { forward, ownedDevice, panelRequest, relayAllowed, relayLimited } from "./relay";
 import { escapeHtml as h, fromBase64Url, PANEL_PREFIX, randomId, toBase64Url } from "./util";
 
 /** How long a ticket is good for. It only has to survive two redirects. */
@@ -316,6 +317,8 @@ panelHost.get(`/p/:device/${AUTH_SEGMENT}`, async (c) => {
     res.headers.set("Cache-Control", "no-store");
     return res;
   };
+  const wait = await overLimit(c, `panel-ticket:${clientAddress(c)}`, LIMITS.panelTicket);
+  if (wait !== null) return limitedPage(c, wait);
   const read = await readTicket(c.env.SESSION_SECRET, c.req.query("t") ?? "", deviceId);
   if ("error" in read) return refused(read.error);
   const { ticket } = read;
@@ -348,6 +351,8 @@ panelHost.all("/p/:device/*", async (c) => {
     if (where.isApi) return c.json({ error: "not_found" }, 404);
     return c.html(page("Not found", "<p>The panel has no such page.</p>"), 404);
   }
+  const slow = await relayLimited(c, account, where.isApi);
+  if (slow) return slow;
   if (c.req.method !== "GET" && !fromPanelHost(c, origin)) return c.json({ error: "cross_origin" }, 403);
   const device = await ownedDevice(c, account, deviceId, where.isApi);
   if (device instanceof Response) return device;

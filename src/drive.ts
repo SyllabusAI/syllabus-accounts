@@ -20,15 +20,15 @@ import { setSignedCookie } from "hono/cookie";
 import * as db from "./db";
 import { openGrant, sealGrant } from "./drive-keys";
 import type { AppEnv, Bindings } from "./env";
+import { LIMITS, limitedJson, overLimit } from "./limits";
 import { AUTH_URL, TOKEN_URL, checkClaims, decodeClaims, pkcePair, redirectUri, type Flow } from "./google";
 import { page } from "./pages";
-import { browserOnly, sameOrigin, sessionSecret } from "./session";
+import { browserOnly, cookieSecure, FLOW_COOKIE, hostCookieName, sameOrigin, sessionSecret } from "./session";
 import { randomId } from "./util";
 import { log } from "./log";
 
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
-const FLOW_COOKIE = "syllabus_accounts_signin";
 const FLOW_SECONDS = 600;
 
 export const drive = new Hono<AppEnv>();
@@ -40,10 +40,10 @@ drive.get("/drive/connect", async (c) => {
   if (!account) return c.redirect("/login?next=" + encodeURIComponent("/drive/connect"));
   const pkce = await pkcePair();
   const flow: Flow = { state: randomId(18), nonce: randomId(18), next: "/", t: Date.now(), kind: "drive", verifier: pkce.verifier };
-  await setSignedCookie(c, FLOW_COOKIE, JSON.stringify(flow), sessionSecret(c), {
+  await setSignedCookie(c, hostCookieName(c.env, FLOW_COOKIE), JSON.stringify(flow), sessionSecret(c), {
     path: "/",
     httpOnly: true,
-    secure: c.env.PUBLIC_URL.startsWith("https://"),
+    secure: cookieSecure(c.env),
     sameSite: "Lax",
     maxAge: FLOW_SECONDS,
   });
@@ -124,6 +124,8 @@ drive.post("/drive/token", async (c) => {
   const account = c.get("account");
   const device = c.get("device");
   if (!account || !device) return c.json({ error: "not_a_device" }, 401);
+  const wait = await overLimit(c, `drive-token:${account.id}`, LIMITS.driveToken);
+  if (wait !== null) return limitedJson(c, LIMITS.driveToken, wait);
   const grant = await db.driveGrant(c.env.DB, account.id);
   if (!grant) return c.json({ error: "no_grant" }, 404);
   if (grant.revoked_at) return c.json({ error: "grant_revoked", reason: grant.revoked_reason }, 409);

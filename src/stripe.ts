@@ -33,7 +33,14 @@ import Stripe from "stripe";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { clientAddress, LIMITS, limitedJson, overLimit } from "./limits";
-import { allowanceFromSubscription, entitlingSubscription, tierForPrice, TOPUP, TRIAL_ALLOWANCE } from "./tiers";
+import {
+  allowanceFromSubscription,
+  entitlingSubscription,
+  PERIOD_END_GRACE_MS,
+  tierForPrice,
+  TOPUP,
+  TRIAL_ALLOWANCE,
+} from "./tiers";
 import { log } from "./log";
 
 export const stripeHooks = new Hono<AppEnv>();
@@ -94,6 +101,13 @@ stripeHooks.post("/stripe/webhook", async (c) => {
     // the same answer to anybody who is not Stripe.
     log(`stripe: refused a delivery, ${(err as Error).message}`);
     return c.json({ error: "bad_signature" }, 400);
+  }
+
+  // Signed by Stripe but not an event: nothing to claim, and no id to claim it
+  // under. Refused plainly rather than left to throw inside the claim.
+  if (typeof event?.id !== "string" || !event.id || typeof event.type !== "string") {
+    log("stripe: refused a signed delivery that is not an event (no id or type)");
+    return c.json({ error: "malformed_event" }, 400);
   }
 
   // The claim IS the insert, so two deliveries arriving together cannot both
@@ -324,7 +338,11 @@ function periodEnd(sub: Stripe.Subscription): string {
   const legacy = (sub as unknown as { current_period_end?: number }).current_period_end;
   const seconds = item?.current_period_end ?? legacy;
   if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "";
-  return new Date(seconds * 1000).toISOString();
+  // Date cannot represent everything a JSON number can, and toISOString throws
+  // on the rest. A handler that throws is retried for three days, so a period
+  // end nobody can read is stored as none rather than failing the delivery.
+  const at = new Date(seconds * 1000);
+  return Number.isNaN(at.getTime()) ? "" : at.toISOString();
 }
 
 /**
@@ -336,19 +354,70 @@ function periodEnd(sub: Stripe.Subscription): string {
  * Pro, and the Starter's own `deleted` event must not be what decides.
  */
 async function writeAllowance(c: Context<AppEnv>, accountId: string): Promise<void> {
-  const existing = await db.allowance(c.env.DB, accountId);
+  await recomputeAllowance(c.env.DB, accountId);
+}
+
+/**
+ * Write the allowance an account's subscriptions are worth right now.
+ *
+ * Shared by the webhook and by the hourly reconcile. Returns whether a row was
+ * written. Never touches a protected source, and never invents a row for an
+ * account that has not subscribed.
+ */
+export async function recomputeAllowance(database: D1Database, accountId: string, at: Date = new Date()): Promise<boolean> {
+  const existing = await db.allowance(database, accountId);
   if (existing && PROTECTED_SOURCES.has(existing.source)) {
     log(`stripe: leaving the ${existing.source} allowance on account ${accountId} alone`);
-    return;
+    return false;
   }
-  const subs = await db.subscriptionsOf(c.env.DB, accountId);
-  const best = entitlingSubscription(subs);
+  const subs = await db.subscriptionsOf(database, accountId);
+  const best = entitlingSubscription(subs, at);
   // Nothing to derive from. An account with no rows at all has never
   // subscribed, and a missing allowance is what the proxy reads as the trial.
-  if (!best) return;
-  const grant = allowanceFromSubscription(best);
-  await db.putAllowance(c.env.DB, accountId, grant);
+  if (!best) return false;
+  const grant = allowanceFromSubscription(best, at);
+  await db.putAllowance(database, accountId, grant);
   log(`stripe: account ${accountId} is now on ${grant.source}`);
+  return true;
+}
+
+/**
+ * Catch the cancellation Stripe never delivered.
+ *
+ * An allowance row is written when an event arrives and is not re-evaluated
+ * as time passes, so a subscription whose `deleted` (or renewal) event was
+ * lost, or was rejected for three days straight, would pay out its plan
+ * forever. `entitles` already refuses a subscription more than the grace past
+ * its period end, but only when somebody asks; this asks, hourly, for every
+ * account whose row still says it is paid while a subscription of theirs is
+ * past that point, and rewrites it from the same rules. A late renewal event
+ * restores the plan the normal way. Bounded and idempotent, like the other
+ * sweeps in the cron.
+ */
+export async function reconcileAllowances(database: D1Database, at: Date = new Date()): Promise<number> {
+  const cutoff = new Date(at.getTime() - PERIOD_END_GRACE_MS).toISOString();
+  let changed = 0;
+  for (const accountId of await db.accountsPastPeriodEnd(database, cutoff, [...PROTECTED_SOURCES], 500)) {
+    const before = await db.allowance(database, accountId);
+    const subs = await db.subscriptionsOf(database, accountId);
+    const best = entitlingSubscription(subs, at);
+    if (!best) continue;
+    const grant = allowanceFromSubscription(best, at);
+    // Already what the rules say (say, a second live subscription carries the
+    // account): leave the row and its updated_at alone.
+    if (
+      before &&
+      before.source === grant.source &&
+      before.audio_seconds === grant.audio_seconds &&
+      before.summary_tokens === grant.summary_tokens &&
+      before.assistant_sessions === grant.assistant_sessions
+    ) {
+      continue;
+    }
+    if (await recomputeAllowance(database, accountId, at)) changed += 1;
+  }
+  if (changed) log(`stripe: reconciled ${changed} allowance(s) whose subscription passed its period end unheard`);
+  return changed;
 }
 
 /** A Stripe field that is a string, an expanded object, or absent. */
