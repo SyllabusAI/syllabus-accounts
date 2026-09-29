@@ -23,22 +23,10 @@ import { LIMITS, limitedPage, overLimit } from "./limits";
 import { page } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
 import { deleteCustomer, deletionStripeClient, endSubscription, isLive, missing, stripeClient } from "./stripe";
-import { entitlingSubscription, type TierName } from "./tiers";
+import { entitlingSubscription, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { log } from "./log";
 
 export const billing = new Hono<AppEnv>();
-
-/**
- * How long a Stripe trial runs if nothing ends it sooner.
- *
- * The trial is really 5 hours of audio, which is not a thing Stripe can
- * count, so it is expressed as a period that almost nobody reaches and ended
- * early when the hours are spent (endTrialIfSpent in stripe.ts). 90 days is
- * about a semester: long enough that somebody who signs up and then does not
- * record for a month is not charged for a product they never tried, and
- * short enough that an abandoned signup does not sit open forever.
- */
-const TRIAL_PERIOD_DAYS = 90;
 
 /** Which price a tier is bought at, from the vars in wrangler.jsonc. */
 function priceFor(c: Context<AppEnv>, tier: TierName): string {
