@@ -25,7 +25,7 @@ import { assistant } from "./assistant";
 import { panelUrl, relay, relayState } from "./relay";
 import { billing, billingView } from "./billing";
 import { settings } from "./settings";
-import { stripeHooks } from "./stripe";
+import { reconcileAllowances, stripeHooks } from "./stripe";
 import { drive } from "./drive";
 import { sweepDriveGrants } from "./drive-keys";
 import { bodyCap, securityHeaders } from "./headers";
@@ -179,8 +179,9 @@ app.onError((err, c) => {
  * Seals any Drive grant not under the current DRIVE_KEY again under it, which
  * is what lets DRIVE_KEY_PREVIOUS be deleted after a rotation
  * (docs/drive-key-rotation.md), and clears rate-limit windows that closed
- * long ago. Both are bounded and idempotent, so a missed or doubled run
- * changes nothing.
+ * long ago. A separate task ends the allowance of a subscription whose
+ * cancellation Stripe never delivered (reconcileAllowances in stripe.ts). All
+ * are bounded and idempotent, so a missed or doubled run changes nothing.
  */
 export async function scheduled(_event: ScheduledController, env: Bindings, ctx: ExecutionContext): Promise<void> {
   ctx.waitUntil(
@@ -195,6 +196,8 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
       await db.sweepRateLimits(env.DB, Math.floor(Date.now() / 1000) - 3600);
     })(),
   );
+  // Its own task, so a failure in the sweeps above cannot starve it (or the reverse).
+  ctx.waitUntil(reconcileAllowances(env.DB).catch((err) => log(`stripe: reconcile failed, ${(err as Error).message}`)));
 }
 
 /**
