@@ -245,3 +245,12 @@ still fail against a script on the same origin.
 Not covered by any of this: a script running on the account origin itself.
 That is what the panel host removes, and the reason `PANEL_ORIGIN` must be set
 before panels are shown to anyone but their owners.
+
+## 0.6.0 launch review
+
+The launch review is [threat-model-0.6.md](threat-model-0.6.md), with the
+OWASP ASVS Level 1 pass in [asvs-l1-checklist.md](asvs-l1-checklist.md) and the
+key rotation runbook in [drive-key-rotation.md](drive-key-rotation.md). It
+qualifies two statements above: the monthly ceiling in threats 1 and 8 counted
+the seconds the caller's audio file says it had (finding F-01, fixed by PR #51), and panels are served off the account origin only once
+`PANEL_ORIGIN` is set (finding F-02).
