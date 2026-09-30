@@ -476,6 +476,10 @@ means sweeping `allowances` against `subscriptions` on a schedule.
 
 ### Going live
 
+The step-by-step switch, with the dashboard checklist and the script that
+checks and swaps the price ids (`scripts/stripe-live.mjs`), is
+[docs/stripe-live.md](docs/stripe-live.md).
+
 Everything above was built against a Stripe **sandbox**, which is isolated:
 its own data, its own keys, its own webhook endpoints. Nothing in it carries
 over. At launch these are recreated in live mode, and each one produces a new
