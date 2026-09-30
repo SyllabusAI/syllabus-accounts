@@ -87,7 +87,7 @@ export const LIMITS = {
    * A bearer that names no live device token, per source. Only FAILURES count,
    * so a real panel is never near it; it stops a script from making the
    * service do a database lookup per guess. Sized for a lecture hall of Macs
-   * whose tokens were all revoked at once ("sign out every Mac"), each
+   * whose tokens were all revoked at once ("sign out everywhere"), each
    * retrying a few times before it gives up.
    */
   badToken: { limit: 600, window: 600 },

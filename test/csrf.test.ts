@@ -180,6 +180,18 @@ function send(v: Victim, type: string, headers: Headers_) {
   });
 }
 
+/**
+ * Each route below sends 44 requests, and every SELF.fetch in a test file is
+ * slower than the one before it: @cloudflare/vitest-pool-workers 0.22 wraps
+ * its entrypoint wrapper's prototype in one more Proxy on every construction
+ * (createProxyPrototypeClass), so a property lookup walks one layer per
+ * earlier request. Calling the Worker directly stays flat; the Worker itself
+ * is not what slows. Measured locally: the relay route takes about 0.1s on
+ * its own and about 2s as the last route here, and under CI load it crossed
+ * the default 5s. 20s is ten times the local figure.
+ */
+const ROUTE_TIMEOUT_MS = 20_000;
+
 describe("every cookie-authenticated route that changes something refuses another site", () => {
   for (const [name, setup] of Object.entries(routes)) {
     it(name, async () => {
@@ -195,7 +207,7 @@ describe("every cookie-authenticated route that changes something refuses anothe
       }
       await victim.untouched();
       expect(fetched).toEqual([]);
-    });
+    }, ROUTE_TIMEOUT_MS);
   }
 
   it("still lets the same page post its own form", async () => {

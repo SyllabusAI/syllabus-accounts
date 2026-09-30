@@ -91,7 +91,7 @@ describe("a cookie with no version (issued before this change)", () => {
   });
 });
 
-describe("Sign out every Mac", () => {
+describe("Sign out everywhere", () => {
   it("bumps the version, signs out other browsers, and keeps the one that pressed it", async () => {
     const mine = await claimDevice("sv-all@example.com");
     const otherBrowser = await sessionCookieFor(mine.account);
@@ -111,6 +111,14 @@ describe("Sign out every Mac", () => {
     const replacement = setCookie.split(";")[0];
     expect(await signedIn(replacement)).toBe(true);
     expect((await get("/", { Cookie: replacement })).status).toBe(200);
+  });
+
+  it("is offered under that name, and says it reaches browsers as well as Macs", async () => {
+    const mine = await claimDevice("sv-label@example.com");
+    const html = await (await get("/", { Cookie: mine.cookie })).text();
+    expect(html).toContain("<button>Sign out everywhere</button>");
+    expect(html).toContain("signs out every Mac and every other browser signed in to this account");
+    expect(html).not.toContain("Sign out every Mac");
   });
 
   it("does not give the replacement a fresh sign-in time (deleting still needs a recent sign-in)", async () => {
