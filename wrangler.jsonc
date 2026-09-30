@@ -68,7 +68,9 @@
     // Which Stripe price is which tier (src/tiers.ts). A price id is public and
     // appears in a Checkout URL, so these are vars rather than secrets. They
     // live here rather than in the tier table because test mode and live mode
-    // have different ids, so these three get swapped when billing goes live.
+    // have different ids, so these get swapped when billing goes live, with
+    // scripts/stripe-live.mjs (docs/stripe-live.md), which checks each id's
+    // amount at Stripe before writing it here.
     //
     // Getting one wrong is quiet rather than loud: an unrecognized price grants
     // Starter, and a SWAPPED pair grants the wrong tier at the right price
