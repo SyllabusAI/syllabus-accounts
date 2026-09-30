@@ -169,7 +169,7 @@ describe("a device token is not a person", () => {
   });
 });
 
-describe("signing out every Mac", () => {
+describe("signing out everywhere", () => {
   it("takes the replacements with it and leaves other accounts alone", async () => {
     const mine = await claimDevice("me@example.com", "My Mac");
     const second = (await (await postJson("/device/start", { name: "Spare" })).json()) as {

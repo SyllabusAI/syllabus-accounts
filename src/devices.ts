@@ -234,7 +234,8 @@ devices.post("/devices/:id/revoke", async (c) => {
 });
 
 /**
- * From the account page: remove every Mac and orphan every token at once.
+ * From the account page ("Sign out everywhere"): remove every Mac, orphan
+ * every token, and sign out every other browser at once.
  *
  * What to reach for when a token may be in somebody else's hands and the list
  * of Macs can no longer be trusted to be the list you enrolled.

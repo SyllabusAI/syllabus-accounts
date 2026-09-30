@@ -9,7 +9,7 @@
  * Nothing is stored per session. Instead every request compares the cookie's
  * version with the account row it loads anyway (sessionMiddleware), so
  * bumping the account's session_version signs out every browser at once with
- * no extra query. "Sign out every Mac" does that (revokeEverything in db.ts).
+ * no extra query. "Sign out everywhere" does that (revokeEverything in db.ts).
  * A cookie from before versions existed has no "v" and counts as 0.
  */
 
