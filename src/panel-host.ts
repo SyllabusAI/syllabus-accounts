@@ -239,7 +239,7 @@ async function panelViewer(c: Context<AppEnv>, deviceId: string): Promise<Accoun
   if (typeof data.a !== "string" || data.d !== deviceId || typeof data.t !== "number") return null;
   if (Date.now() - data.t > PANEL_COOKIE_HOURS * 3600 * 1000) return null;
   const account = await db.accountById(c.env.DB, data.a);
-  // "Sign out every Mac" bumps token_version; a panel cookie from before it is done too.
+  // "Sign out everywhere" bumps token_version; a panel cookie from before it is done too.
   if (!account || (account.token_version ?? 0) !== data.v) return null;
   return account;
 }

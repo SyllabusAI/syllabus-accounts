@@ -16,7 +16,7 @@ you need it.
 
 | Step | What | How |
 | --- | --- | --- |
-| tokens | Every device token, every panel cookie, every panel ticket | `token_version + 1`; every device token and device marked revoked. The same three writes as "Sign out every Mac" (`revokeEverything`, `src/db.ts`). Panel cookies are bound to `token_version`; a ticket already minted dies with its device, because the panel host refuses a revoked device |
+| tokens | Every device token, every panel cookie, every panel ticket | `token_version + 1`; every device token and device marked revoked. The same three writes as "Sign out everywhere" (`revokeEverything`, `src/db.ts`). Panel cookies are bound to `token_version`; a ticket already minted dies with its device, because the panel host refuses a revoked device |
 | sessions | Every browser session cookie | `session_version + 1`, only when `accounts` has that column (migration 0017, PR #52). Detected on every run with `PRAGMA table_info(accounts)`, so the tool works before and after #52 lands |
 | grant | The Drive refresh token | Opened with `DRIVE_KEY`, then `DRIVE_KEY_PREVIOUS` (as `unseal` in `src/drive-keys.ts`), revoked at Google, and only then is the stored ciphertext deleted |
 

@@ -676,13 +676,15 @@ function onDate(iso: string): string {
 }
 
 /**
- * For a Mac that was lost or a token that may have been copied: removing the
- * Macs one at a time is not enough if whoever holds the token can connect
- * more while you work, so this ends every connection in one go.
+ * For a Mac that was lost, a token that may have been copied, or a browser
+ * left signed in somewhere: removing the Macs one at a time is not enough if
+ * whoever holds the token can connect more while you work, so this ends every
+ * connection and every other browser session in one go. The browser that
+ * presses it stays signed in (revoke-all in devices.ts).
  */
-const signOutEverything = `<p class="muted">Lost a Mac, or think someone else has a copy of its connection?
-  <form method="post" action="/devices/revoke-all" class="inline"><button>Sign out every Mac</button></form>
-  Each one asks for a new code the next time you open it.</p>`;
+const signOutEverything = `<p class="muted">Lost a Mac, or think someone else has a copy of its connection or your sign-in?
+  <form method="post" action="/devices/revoke-all" class="inline"><button>Sign out everywhere</button></form>
+  This signs out every Mac and every other browser signed in to this account. Each Mac asks for a new code the next time you open it.</p>`;
 
 function driveSection(grant: DriveGrant | null): string {
   if (grant && !grant.revoked_at) {
