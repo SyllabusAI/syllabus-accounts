@@ -43,6 +43,12 @@ export type Flow = {
   kind?: "signin" | "drive";
   /** The PKCE code_verifier. Only its S256 hash goes to Google with the user. */
   verifier?: string;
+  /**
+   * A Drive flow only: the account that started it. The grant is attached to
+   * this account or to none, so a browser whose session changed while Google
+   * was asking cannot file one account's Drive under another (F-11).
+   */
+  account?: string;
 };
 
 /**

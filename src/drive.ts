@@ -39,7 +39,9 @@ drive.get("/drive/connect", async (c) => {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent("/drive/connect"));
   const pkce = await pkcePair();
-  const flow: Flow = { state: randomId(18), nonce: randomId(18), next: "/", t: Date.now(), kind: "drive", verifier: pkce.verifier };
+  const flow: Flow = {
+    state: randomId(18), nonce: randomId(18), next: "/", t: Date.now(), kind: "drive", verifier: pkce.verifier, account: account.id,
+  };
   await setSignedCookie(c, hostCookieName(c.env, FLOW_COOKIE), JSON.stringify(flow), sessionSecret(c), {
     path: "/",
     httpOnly: true,
@@ -70,6 +72,20 @@ drive.get("/drive/connect", async (c) => {
 export async function finishConnect(c: Context<AppEnv>, flow: Flow, code: string) {
   const account = c.get("account");
   if (!account) return c.redirect("/login?next=" + encodeURIComponent("/drive/connect"));
+  // Checked before Google's token endpoint is called, so a mismatched flow
+  // spends nothing and stores nothing. A flow from before this field existed
+  // names no account and is refused the same way; it only means connecting
+  // again.
+  if (flow.account !== account.id) {
+    log(`drive connect refused: the flow was started by another account than ${account.id}`);
+    return c.html(
+      page(
+        "Google Drive",
+        "<p>You are signed in to a different Syllabus account than the one that started connecting Drive, so nothing was connected.</p><p><a href='/drive/connect'>Connect Drive to this account</a></p>",
+      ),
+      409,
+    );
+  }
   try {
     const res = await fetch(TOKEN_URL, {
       method: "POST",
