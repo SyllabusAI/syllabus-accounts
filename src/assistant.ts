@@ -577,9 +577,36 @@ type Outcome = {
   failed: boolean;
 };
 
-async function relayStream(
+/**
+ * How long a provider stream may go quiet, and how long it may run at all.
+ *
+ * The answer is billed when the stream ends. Its reservation is swept after
+ * RESERVATION_SECONDS (db.ts) as wreckage, so a stream that stalled and ended
+ * after that would settle a row that is no longer there and be billed
+ * nothing (F-16). Both limits end it well inside that window, as a failure,
+ * which is settled at the estimate it was held at. Anthropic sends a ping
+ * every few seconds on a healthy stream, so two quiet minutes is a stall.
+ */
+export const STREAM_IDLE_SECONDS = 120;
+export const STREAM_DEADLINE_SECONDS = 600;
+
+/** One read, or "stalled" if nothing came within `ms`. */
+async function readWithin<T>(reader: ReadableStreamDefaultReader<T>, ms: number): Promise<ReadableStreamReadResult<T> | "stalled"> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const stalled = new Promise<"stalled">((resolve) => {
+    timer = setTimeout(() => resolve("stalled"), Math.max(0, ms));
+  });
+  try {
+    return await Promise.race([reader.read(), stalled]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
+export async function relayStream(
   upstream: ReadableStream<Uint8Array>,
   emit: (event: Record<string, unknown>) => Promise<boolean>,
+  limits: { idleMs: number; deadlineMs: number } = { idleMs: STREAM_IDLE_SECONDS * 1000, deadlineMs: STREAM_DEADLINE_SECONDS * 1000 },
 ): Promise<Outcome> {
   const usage: Usage = { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 };
   const blocks: Block[] = [];
@@ -600,9 +627,16 @@ async function relayStream(
   const reader = upstream.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = "";
   let listening = true;
+  const deadline = Date.now() + limits.deadlineMs;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const read = await readWithin(reader, Math.min(limits.idleMs, deadline - Date.now()));
+      if (read === "stalled") {
+        log(`assistant: the provider stream ${Date.now() >= deadline ? "ran past its deadline" : "went quiet"}; ending it`);
+        failed = true;
+        break;
+      }
+      const { done, value } = read;
       if (done) break;
       buffer += value;
       let cut: number;
