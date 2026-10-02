@@ -37,6 +37,9 @@ export default defineConfig(async () => {
       }),
     ],
     test: {
+      // Claude Code keeps its worktrees in .claude/worktrees, each a full copy
+      // of this repo; without this, a plain `npm test` runs their tests too.
+      exclude: ["**/node_modules/**", ".claude/**"],
       setupFiles: ["./test/apply-migrations.ts", "./test/no-pii-in-logs.ts"],
     },
   };
