@@ -53,6 +53,16 @@ export type Bindings = {
    * to OpenAI, which is what this service did before Groq.
    */
   GROQ_API_KEY?: string;
+  /**
+   * Var, OPTIONAL: "on" accepts `quality=high` on /proxy/transcribe. Unset
+   * (the default, and production's) refuses it before anything is charged.
+   *
+   * Keep it off until the second pass is billed on a length the caller
+   * cannot write (threat-model-0.6.md, F-21). gpt-4o-transcribe's answer
+   * carries no duration, so today a high pass is billed on the caller's own
+   * header and a byte floor that low-bitrate audio gets under.
+   */
+  HIGH_QUALITY_PASS?: string;
   /** Secret: the summary key the proxy spends. `wrangler secret put ANTHROPIC_API_KEY`. */
   ANTHROPIC_API_KEY: string;
   /**

@@ -543,6 +543,11 @@ proxy.post("/proxy/transcribe", async (c) => {
     return c.json({ error: "bad_request", detail: "quality must be standard or high" }, 400);
   }
   const quality: Quality = rawQuality === "high" ? "high" : "standard";
+  // Refused before the audio is read or anything is held: see
+  // HIGH_QUALITY_PASS in env.ts for why it is off.
+  if (quality === "high" && c.env.HIGH_QUALITY_PASS !== "on") {
+    return c.json({ error: "quality_unavailable", detail: "the high-quality pass is not offered yet" }, 400);
+  }
   const rate = quality === "high" ? HIGH_QUALITY_RATE : 1;
   // Read once: the same bytes are measured and then forwarded.
   const bytes = new Uint8Array(await audio.arrayBuffer());
