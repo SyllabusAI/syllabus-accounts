@@ -634,7 +634,10 @@ proxy.post("/proxy/transcribe", async (c) => {
   }
   // Only a length the provider measured is kept for a second pass; the
   // OpenAI legs report none, and a chunk they handled gets no second pass.
-  if (quality === "standard" && attempt.duration !== null) {
+  // Nothing is kept while the second pass is off: the privacy page says the
+  // audio leaves nothing behind but the usage count, and that stays true
+  // until the pass, and the words about it, are turned on together.
+  if (quality === "standard" && attempt.duration !== null && c.env.HIGH_QUALITY_PASS === "on") {
     await db.recordMeasuredChunk(c.env.DB, account.id, chunkHash, attempt.duration);
   }
   // It still has to happen even when nothing changes: a reservation nobody

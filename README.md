@@ -364,6 +364,8 @@ chunk an account sent, keyed by a SHA-256 of the chunk's bytes. It is what a
 `quality=high` second pass on the same chunk is billed on (threat-model-0.6.md,
 F-21). The hash names audio the account already sent; it is not the audio and
 cannot be turned back into it. The hourly cron drops rows older than a day.
+Nothing is written to it while `HIGH_QUALITY_PASS` is off, which is
+production today; the `/privacy` page has to name it before that changes.
 
 `subscriptions` mirrors what Stripe says an account pays for, `stripe_events`
 records every webhook event id so a retried delivery is handled once, and

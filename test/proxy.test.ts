@@ -928,6 +928,15 @@ describe("a chunk the Mac found hard to hear", () => {
     expect((await postAudio(highForm(480), bearer(fallback.token))).status).toBe(409);
   });
 
+  it("keeps no measurement at all while the pass is switched off", async () => {
+    delete switched.HIGH_QUALITY_PASS;
+    upstream(bothLegs(480));
+    const { account, token } = await claimDevice("high-off-nothing-kept@example.com");
+    expect((await postAudio(m4aForm(480, 480), bearer(token))).status).toBe(200);
+    const kept = await env.DB.prepare("SELECT COUNT(*) AS n FROM measured_chunks WHERE account_id = ?").bind(account.id).first<{ n: number }>();
+    expect(kept!.n).toBe(0);
+  });
+
   it("forgets a measurement after a day, and the cron sweeps it", async () => {
     upstream(bothLegs(480));
     const { account, token } = await claimDevice("high-stale@example.com");
