@@ -42,6 +42,7 @@ import {
   TRIAL_ALLOWANCE,
 } from "./tiers";
 import { log } from "./log";
+import { trialHash, trialSecret } from "./crypto";
 
 export const stripeHooks = new Hono<AppEnv>();
 
@@ -273,7 +274,49 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
   }
   await db.putSubscription(c.env.DB, rowFor(c.env, sub, accountId));
   await writeAllowance(c, accountId);
+  if (sub.status === "trialing" && c.env.TRIAL_CARD_CHECK === "on") await holdTrialToOnePerCard(c, sub, accountId);
   return accountId;
+}
+
+/**
+ * One free trial per card (F-10; the terms say one trial per person).
+ *
+ * The card's Stripe fingerprint is the same for the same card on any
+ * customer, so a person making a new Google account for each trial still
+ * brings the same fingerprint. Only a keyed hash of it is kept (trial_cards).
+ * A card already used for another account's trial has this trial ended at
+ * once, which charges the card for the plan it chose; that is a paid plan,
+ * not a refusal, and Stripe's own receipt says so.
+ *
+ * Nothing here is retried: a webhook that keeps failing would keep ending
+ * trials. A lookup or update that fails is logged and the trial stands.
+ */
+async function holdTrialToOnePerCard(c: Context<AppEnv>, sub: Stripe.Subscription, accountId: string): Promise<void> {
+  const method = idOf(sub.default_payment_method as string | { id?: string } | null);
+  // A subscription that took no card (the 100% off code) has nothing to check.
+  if (!method) return;
+  let fingerprint = "";
+  try {
+    const pm = await stripeClient(c.env).paymentMethods.retrieve(method);
+    fingerprint = pm.card?.fingerprint ?? "";
+  } catch (err) {
+    log(`stripe: could not read the card on ${sub.id} to check its trial, ${(err as Error).message}`);
+    return;
+  }
+  if (!fingerprint) return;
+  const cardHash = await trialHash(trialSecret(c.env), "card:" + fingerprint);
+  const owner = await db.trialCardOwner(c.env.DB, cardHash);
+  if (owner === null) {
+    await db.recordTrialCard(c.env.DB, cardHash, accountId);
+    return;
+  }
+  if (owner === accountId) return;
+  try {
+    await stripeClient(c.env).subscriptions.update(sub.id, { trial_end: "now" });
+    log(`stripe: ${sub.id} for ${accountId} is on a card that already had a trial; trial ended`);
+  } catch (err) {
+    log(`stripe: could not end the repeat-card trial on ${sub.id}, ${(err as Error).message}`);
+  }
 }
 
 /**

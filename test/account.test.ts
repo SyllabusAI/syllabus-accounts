@@ -109,6 +109,7 @@ async function fullAccount(email: string) {
   await db.putDriveGrant(env.DB, id, await encrypt(env.DRIVE_KEY, "1//refresh-to-revoke"), "drive.file", email);
   await db.recordUsage(env.DB, id, mine.deviceId, "transcribe", 1200, "groq");
   await db.recordMeasuredChunk(env.DB, id, "ab".repeat(32), 480);
+  await db.recordTrialCard(env.DB, "cd".repeat(16) + id.slice(0, 8), id);
   await db.putAllowance(env.DB, id, grant(162_000, 1_350_000, "pro"));
   await db.recordTopup(env.DB, `cs_topup_${id}`, id, 18_000, 150_000);
   await db.linkStripeCustomer(env.DB, `cus_${id}`, id);
@@ -299,7 +300,7 @@ describe("deleting", () => {
     expect(Object.keys(before.left).sort()).toEqual(
       [
         "accounts", "allowances", "device_codes", "device_tokens", "devices", "drive_grants", "measured_chunks",
-        "rate_limits", "settings", "stripe_customers", "stripe_events", "subscriptions", "topups", "usage",
+        "rate_limits", "settings", "stripe_customers", "stripe_events", "subscriptions", "topups", "trial_cards", "usage",
       ].sort(),
     );
 

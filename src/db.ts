@@ -934,6 +934,22 @@ export async function sweepMeasuredChunks(db: D1Database): Promise<void> {
     .run();
 }
 
+// --- One trial per card (F-10) -----------------------------------------------
+
+/** The account a card (as its keyed hash) first started a trial on, or null. */
+export async function trialCardOwner(db: D1Database, cardHash: string): Promise<string | null> {
+  const row = await db.prepare("SELECT account_id FROM trial_cards WHERE card_hash = ?").bind(cardHash).first<{ account_id: string }>();
+  return row ? row.account_id : null;
+}
+
+/** Note that this card started a trial on this account. The first account to use a card keeps it. */
+export async function recordTrialCard(db: D1Database, cardHash: string, accountId: string): Promise<void> {
+  await db
+    .prepare("INSERT INTO trial_cards (card_hash, account_id, created_at) VALUES (?, ?, ?) ON CONFLICT (card_hash) DO NOTHING")
+    .bind(cardHash, accountId, now())
+    .run();
+}
+
 // --- Deleting an account -----------------------------------------------------
 
 /** Every device an account ever had, removed ones included: each has a relay object to clear. */
@@ -989,6 +1005,7 @@ export async function deleteAccountData(db: D1Database, accountId: string, subHa
     db.prepare("DELETE FROM drive_grants WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM usage WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM measured_chunks WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM trial_cards WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM allowances WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM topups WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM subscriptions WHERE account_id = ?").bind(accountId),

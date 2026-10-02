@@ -47,6 +47,15 @@ export type Bindings = {
    * the sub they came from is not stored. After that, never rotate it.
    */
   TRIAL_SECRET?: string;
+  /**
+   * Var, OPTIONAL: "on" holds a free trial to one per card (F-10). When a
+   * trialing subscription arrives, its card's Stripe fingerprint is hashed
+   * under TRIAL_SECRET and kept in trial_cards; a card that already started
+   * a trial on another account has the new trial ended at once, so the card
+   * is charged for the plan. Unset (production today) does none of this and
+   * keeps nothing: the /privacy page has to name the card hash first.
+   */
+  TRIAL_CARD_CHECK?: string;
   /** Secret: encrypts stored Drive refresh tokens. `wrangler secret put DRIVE_KEY`. */
   DRIVE_KEY: string;
   /**
