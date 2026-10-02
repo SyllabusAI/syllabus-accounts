@@ -671,6 +671,27 @@ Blocking items were F-01 (fixed by PR #51) and F-02. Each Medium below has a dec
 | F-07 deploy path | **Fix before launch (settings, no code)** | Anyone with write access can dispatch Deploy from a branch: the `production` environment has no protection rules and no branch policy. Branch protection requires the two checks but not reviews. Secret scanning and push protection are off on a public repo. Actions are pinned by tag (F-19) | Give `production` a deployment branch policy of `main` and a required reviewer; turn on secret scanning with push protection and Dependabot alerts; require one review on `main`, or accept that two owners can merge their own PRs; pin actions by SHA | Liam |
 | F-08 DRIVE_KEY runbook gap | **Done: doc fixed here, tool built in PR #54** (was: build the tool only if the branch is ever needed) | The "key and database both leaked" branch tells the operator to revoke every grant at Google, and no code path does that in bulk | See [drive-key-rotation.md](drive-key-rotation.md) and [bulk-revoke.md](bulk-revoke.md) | Liam |
 
+## Triage of every Low
+
+Written 2026-10-02 against `main` at `23b19f8`. F-09 and F-14 are fixed (see
+the status table above). Each remaining Low has a proposed decision; the
+owners confirm or change it before launch. "Code" means a change in this repo;
+"Settings" means a dashboard or GitHub change.
+
+| ID | Status on `main` today | Proposed decision | What closes it | Owner |
+|---|---|---|---|---|
+| F-10 trial farming | Open. No card fingerprint check anywhere in `src/` | **Accept for launch**, bounded by the global ceiling and the meter (about $1 to $2 a farmed trial) | Settings: a Stripe Radar rule that blocks a trial on a card fingerprint already used for one. Code, later: check `payment_method.fingerprint` at trial start | Trace |
+| F-10b the 100% off code is a bearer secret | Open. `allow_promotion_codes: true` and `redeem=1` still skip the card | **Fix at the live swap (settings)** | Create the live promotion code with a redemption cap and an expiry, and send it only to named people | Trace |
+| F-11 Drive consent not bound to the account | Open. The flow cookie in `src/drive.ts` carries `kind: "drive"` but no account id | **Fix in launch week (code)** | Put the account id in the flow and refuse the callback if a different account is signed in. Decide whether a different Google identity may attach its Drive (today it can) | Liam |
+| F-12 `SESSION_SECRET` rotation reopens trials | Open. `trialHash` in `src/crypto.ts` derives from `SESSION_SECRET` | **Accept for launch, fix before the first rotation** | Code plus one secret: a `TRIAL_SECRET` that falls back to `SESSION_SECRET`, set to the current `SESSION_SECRET` value so no `trial_used` row changes. Until then, the leaked-secret runbook notes that a rotation resets the repeat-trial block | Liam |
+| F-13 `DRIVE_KEY` hashed, not stretched | Open. `src/crypto.ts` imports `SHA-256(secret)` as the AES key | **Accept**: stretching only matters for a guessable secret, and this one is generated | Process: generate `DRIVE_KEY` with `openssl rand -base64 48`, as drive-key-rotation.md already says. Code, optional: refuse to start on a key under 32 characters | Liam |
+| F-15 relayed `Location`, relayed pages without CSP | Partly fixed. The panel host now adds `PANEL_CSP` to every relayed page (`src/panel-host.ts`). On the account host, which is where the relay runs while `PANEL_ORIGIN` is empty, relayed pages still get no policy, and `location` is still passed through (`src/panel-relay.ts`) | **Follows F-02**: setting `PANEL_ORIGIN` closes the CSP half. Accept the `Location` half | Code, optional: rewrite or drop a relayed `Location` that leaves the panel's own path | Liam |
+| F-16 a stalled assistant stream outlives its 900 s reservation | Open. `RESERVATION_SECONDS = 900` in `src/db.ts` | **Accept**: the session table still caps the dollars | Code, later: settle the reservation when the stream closes, however it closes | Liam |
+| F-17 device code lives 15 minutes, ASVS 2.7.2 says 10 | Open. `CODE_SECONDS = 900` in `src/devices.ts` | **Fix before launch (code, one constant)** | `CODE_SECONDS = 600`. A student typing the code on the same Mac needs well under 10 minutes | Liam |
+| F-18 one script can lock a shared address out of sign-in | Open by design. `login` and `callback` allow 600 per 10 minutes per address, sized for a lecture hall behind one NAT (rate-limits.md) | **Accept**: per-account, per-device, global and money ceilings do not depend on the address | Watch for 429s on `/login` in the first week; raise the per-address limits if a campus hits them | Liam |
+| F-19 Actions pinned by tag, not commit | Open. `actions/checkout@v4` and `actions/setup-node@v4` in every workflow | **Fix before launch (code)**, part of F-07: the Deploy job holds `CLOUDFLARE_API_TOKEN` | Pin both actions to a full commit SHA, with the tag in a comment | Liam |
+| F-20 JSON answers carry no `Cache-Control: no-store` | Open. `src/headers.ts` adds `no-store` to HTML only | **Fix before launch (code)** | Add `no-store` to JSON answers as well, unless a handler set its own `Cache-Control` | Liam |
+
 ## Decisions needed from Liam
 
 1. **F-01 (done, PR #51):** ship the floor (`bytes / 24000`) as a same-day patch, then the
@@ -681,6 +702,8 @@ Blocking items were F-01 (fixed by PR #51) and F-02. Each Medium below has a dec
    sign-out-everyone deploy?
 4. **F-06:** refund policy for deleted accounts that used their allowance.
 5. **F-07:** turn on the GitHub settings above. They are dashboard clicks.
+6. **The Lows:** confirm or change each proposed decision in "Triage of
+   every Low" above.
 
 ## Evidence index
 
