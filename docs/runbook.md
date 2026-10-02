@@ -89,8 +89,9 @@ an open decision for the owners.
 
 ## The monthly service cap
 
-`GLOBAL_CEILING` in `src/proxy.ts` caps the whole service at 400 audio hours
-and 12M summary tokens a calendar month, across every account. When it
+`GLOBAL_CEILING` in `src/proxy.ts` caps the whole service at 2,000 audio
+hours and 60M summary tokens a calendar month, across every account (raised
+from 400 hours and 12M on 2026-10-02 for the launch). When it
 trips, every Mac's transcription or summary is refused with
 `service_ceiling` (HTTP 402), the recording stays in the Mac's inbox, and
 the assistant says it is paused for everyone.
@@ -101,12 +102,13 @@ the assistant says it is paused for everyone.
   npx wrangler d1 execute syllabus-accounts --remote --command "SELECT kind, SUM(units) AS units, COUNT(DISTINCT account_id) AS accounts FROM usage WHERE period = strftime('%Y-%m','now') GROUP BY kind"
   ```
 
-  Audio is in seconds (400 hours is 1,440,000). Summaries are in tokens.
+  Audio is in seconds (2,000 hours is 7,200,000). Summaries are in tokens.
 - **Raising it.** Change the constant in a PR. The merge deploys it in a few
   minutes. Recordings held in inboxes are processed on the Mac's next run.
 - **Sizing.** September ran about 26,000 summary tokens per audio hour, so
-  12M tokens is about 470 audio hours. The two caps run out at about the
-  same time.
+  60M tokens is about 2,300 audio hours, just past the audio cap. Raise the
+  two together. 2,000 hours is roughly 130 students recording 15 hours a
+  month.
 
 ## The hourly cron
 
@@ -119,4 +121,9 @@ the assistant says it is paused for everyone.
 
 It logs only when a job did something or failed. To see it run, start
 `npx wrangler tail --format json` a minute before :17 and look for an event
-with `"cron": "17 * * * *"`.
+with `"cron": "17 * * * *"`. Seen running on 2026-10-02 at 14:17:08 CDT,
+outcome `ok`, no exceptions.
+
+On macOS there is no `timeout` command, so `timeout 600 npx wrangler tail`
+exits at once and captures nothing. Run the tail in the background and stop
+it with `kill` instead.
