@@ -56,14 +56,20 @@ export async function decrypt(secret: string, sealed: string): Promise<string> {
  * Google `sub`, so a repeat free trial can be recognized and nothing else can
  * be learned. See migrations/0013_trial_used.sql.
  *
- * HMAC-SHA256 under a key derived from SESSION_SECRET with its own label, so
- * the value is useless without the Worker's secret and is never the same
- * bytes as anything the session cookie signs. Hex, 64 characters.
+ * HMAC-SHA256 under a key derived from TRIAL_SECRET (or SESSION_SECRET when
+ * that is unset; see trialSecret) with its own label, so the value is useless
+ * without the Worker's secret and is never the same bytes as anything the
+ * session cookie signs. Hex, 64 characters.
  */
-export async function trialHash(sessionSecret: string, sub: string): Promise<string> {
+/** The secret trialHash keys on: TRIAL_SECRET, else SESSION_SECRET (env.ts says why). */
+export function trialSecret(env: { TRIAL_SECRET?: string; SESSION_SECRET: string }): string {
+  return env.TRIAL_SECRET || env.SESSION_SECRET;
+}
+
+export async function trialHash(secret: string, sub: string): Promise<string> {
   const derived = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode("syllabus trial-used key v1\n" + sessionSecret),
+    new TextEncoder().encode("syllabus trial-used key v1\n" + secret),
   );
   const hmacKey = await crypto.subtle.importKey("raw", derived, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = await crypto.subtle.sign("HMAC", hmacKey, new TextEncoder().encode(sub));
