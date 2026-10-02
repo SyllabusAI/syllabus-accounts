@@ -53,9 +53,9 @@ will not.
 | F-14 | Low | The assistant caches plaintext summaries and transcripts on the Mac, against what its own docstring says | No: fixed by LectureAI PR #102 |
 | F-15 | Low | A relayed panel can send a `Location` header, and relayed pages carry no CSP | No |
 | F-16 | Low | A stalled assistant stream can outlive its 900 second reservation | No |
-| F-17 | Low | A device code lives 15 minutes; ASVS 2.7.2 says 10 | No |
+| F-17 | Low | A device code lives 15 minutes; ASVS 2.7.2 says 10 | No: fixed 2026-10-02 |
 | F-18 | Low | Per-address limits let one script lock a shared address out of sign-in | No |
-| F-19 | Low | GitHub Actions are pinned by tag, not by commit | No |
+| F-19 | Low | GitHub Actions are pinned by tag, not by commit | No: fixed 2026-10-02 |
 | F-21 | **High** | The `quality=high` second pass (PR #57) has no provider-measured duration, so it is billed on the caller's header and the byte floor again: F-01 on a path the caller picks | No: closed by PR #62 (the pass is refused until it is bound to a measured length) |
 | F-22 | Medium | LectureAI's release workflow (LectureAI PR #105) reads the signing and Sparkle keys as repository secrets on any `v*` tag, so anyone who can push a tag can ship a trusted update to every Mac | No: LectureAI PR #113 plus the `release` environment settings in its `docs/signing.md` |
 
@@ -73,7 +73,7 @@ will not.
 
 The sections below are the review as written on 2026-09-29 and are kept as
 the record of what was found.
-| F-20 | Low | JSON answers carry no `Cache-Control: no-store`, only HTML does | No |
+| F-20 | Low | JSON answers carry no `Cache-Control: no-store`, only HTML does | No: fixed 2026-10-02 |
 
 Two launch blockers, and both have a small fix. Everything else is in the
 triage at the end.
@@ -691,10 +691,10 @@ owners confirm or change it before launch. "Code" means a change in this repo;
 | F-13 `DRIVE_KEY` hashed, not stretched | Open. `src/crypto.ts` imports `SHA-256(secret)` as the AES key | **Accept**: stretching only matters for a guessable secret, and this one is generated | Process: generate `DRIVE_KEY` with `openssl rand -base64 48`, as drive-key-rotation.md already says. Code, optional: refuse to start on a key under 32 characters | Liam |
 | F-15 relayed `Location`, relayed pages without CSP | Partly fixed. Relayed pages now carry the panel's own nonce CSP (PR #49), and the panel host adds `PANEL_CSP` on top (`src/panel-host.ts`). On the account host, which is where the relay runs while `PANEL_ORIGIN` is empty, the Worker adds no policy of its own, so the only one is written by whoever holds the device token. `location` is still passed through (`src/panel-relay.ts`) | **Follows F-02**: setting `PANEL_ORIGIN` closes the CSP half. Accept the `Location` half | Code, optional: rewrite or drop a relayed `Location` that leaves the panel's own path | Liam |
 | F-16 a stalled assistant stream outlives its 900 s reservation | Open. `RESERVATION_SECONDS = 900` in `src/db.ts` | **Accept**: the session table still caps the dollars | Code, later: settle the reservation when the stream closes, however it closes | Liam |
-| F-17 device code lives 15 minutes, ASVS 2.7.2 says 10 | Open. `CODE_SECONDS = 900` in `src/devices.ts` | **Fix before launch (code, one constant)** | `CODE_SECONDS = 600`. A student typing the code on the same Mac needs well under 10 minutes | Liam |
+| F-17 device code lives 15 minutes, ASVS 2.7.2 says 10 | **Done 2026-10-02**: `CODE_SECONDS = 600` in `src/devices.ts`. The Mac reads `expires_in`, so it needs no change | Fixed | | Liam |
 | F-18 one script can lock a shared address out of sign-in | Open by design. `login` and `callback` allow 600 per 10 minutes per address, sized for a lecture hall behind one NAT (rate-limits.md) | **Accept**: per-account, per-device, global and money ceilings do not depend on the address | Watch for 429s on `/login` in the first week; raise the per-address limits if a campus hits them | Liam |
-| F-19 Actions pinned by tag, not commit | Open. `actions/checkout@v4` and `actions/setup-node@v4` in every workflow | **Fix before launch (code)**, part of F-07: the Deploy job holds `CLOUDFLARE_API_TOKEN` | Pin both actions to a full commit SHA, with the tag in a comment | Liam |
-| F-20 JSON answers carry no `Cache-Control: no-store` | Open. `src/headers.ts` adds `no-store` to HTML only | **Fix before launch (code)** | Add `no-store` to JSON answers as well, unless a handler set its own `Cache-Control` | Liam |
+| F-19 Actions pinned by tag, not commit | **Done 2026-10-02**: every action in both repos is pinned to the commit its tag pointed at (checkout v4.4.0, setup-node v4.4.0, setup-python v5.6.0, upload-artifact v4.6.2), the release in a comment | Fixed | | Liam |
+| F-20 JSON answers carry no `Cache-Control: no-store` | **Done 2026-10-02**: `src/headers.ts` adds `no-store` to JSON as well as HTML, unless a handler set its own `Cache-Control` | Fixed | | Liam |
 
 ## Decisions needed from Liam
 

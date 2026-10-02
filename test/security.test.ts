@@ -245,6 +245,11 @@ describe("security headers", () => {
     expect(health.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(health.headers.get("Content-Security-Policy")).toBeNull();
 
+    // A JSON answer is not cached either (F-20): this one carries a device code.
+    const started = await postJson("/device/start", {});
+    expect(started.headers.get("Content-Type")).toContain("application/json");
+    expect(started.headers.get("Cache-Control")).toBe("no-store");
+
     // The not-connected page comes back from the Durable Object, whose
     // response headers are immutable; they are added to a copy.
     const mine = await claimDevice("headers@example.com");

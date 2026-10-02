@@ -80,12 +80,17 @@ export const securityHeaders: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!c.res.headers.has("Referrer-Policy")) extra.push(["Referrer-Policy", "same-origin"]);
   if (c.env.PUBLIC_URL.startsWith("https://")) extra.push(["Strict-Transport-Security", HSTS]);
   const type = c.res.headers.get("Content-Type") ?? "";
-  if (!relayed && type.startsWith("text/html")) {
+  const html = type.startsWith("text/html");
+  if (!relayed && html) {
     // A handler that set its own policy chose it deliberately; like the
     // Referrer-Policy above, it is never overwritten.
     if (!c.res.headers.has("Content-Security-Policy")) extra.push(["Content-Security-Policy", await pagePolicy()]);
-    // An account page names a person; a shared computer's back button should not show it.
-    if (!c.res.headers.has("Cache-Control")) extra.push(["Cache-Control", "no-store"]);
+  }
+  // An account page names a person, and a JSON answer can carry a token, a
+  // usage total or a transcript; neither belongs in a shared computer's cache
+  // or back button (F-20). A relayed panel sets its own (relay.ts).
+  if (!relayed && (html || type.startsWith("application/json")) && !c.res.headers.has("Cache-Control")) {
+    extra.push(["Cache-Control", "no-store"]);
   }
   try {
     for (const [name, value] of extra) c.res.headers.set(name, value);
