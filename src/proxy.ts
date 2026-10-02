@@ -206,8 +206,15 @@ export { TRIAL_ALLOWANCE } from "./tiers";
  * set well above any plausible real month and is meant to be hit only when
  * something is wrong: a leak of many tokens at once, a retry storm, a bug
  * here. Raise it deliberately when real accounts approach it.
+ *
+ * Raised 2026-10-02 for the paid launch, from 400 hours and 12M tokens: 400
+ * hours is about 25 students recording 15 hours a month, which a good launch
+ * week passes. Summaries ran about 26,000 tokens per audio hour in
+ * September, so the token side moves with the audio side; otherwise it
+ * would stop the service at about 470 hours. At full use this is roughly
+ * $220 to $360 of transcription plus the summaries.
  */
-export const GLOBAL_CEILING = { audio_seconds: 400 * 3600, summary_tokens: 12_000_000 };
+export const GLOBAL_CEILING = { audio_seconds: 2000 * 3600, summary_tokens: 60_000_000 };
 
 export const proxy = new Hono<AppEnv>();
 
