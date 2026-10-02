@@ -108,6 +108,7 @@ async function fullAccount(email: string) {
   await db.putSetting(env.DB, id, "syllabus", "schedule", "[[class]]\nname = 'ACCT'", mine.deviceId, null);
   await db.putDriveGrant(env.DB, id, await encrypt(env.DRIVE_KEY, "1//refresh-to-revoke"), "drive.file", email);
   await db.recordUsage(env.DB, id, mine.deviceId, "transcribe", 1200, "groq");
+  await db.recordMeasuredChunk(env.DB, id, "ab".repeat(32), 480);
   await db.putAllowance(env.DB, id, grant(162_000, 1_350_000, "pro"));
   await db.recordTopup(env.DB, `cs_topup_${id}`, id, 18_000, 150_000);
   await db.linkStripeCustomer(env.DB, `cus_${id}`, id);
@@ -297,8 +298,8 @@ describe("deleting", () => {
     // The fixture has to reach every table the check can see, or the check proves little.
     expect(Object.keys(before.left).sort()).toEqual(
       [
-        "accounts", "allowances", "device_codes", "device_tokens", "devices", "drive_grants", "rate_limits",
-        "settings", "stripe_customers", "stripe_events", "subscriptions", "topups", "usage",
+        "accounts", "allowances", "device_codes", "device_tokens", "devices", "drive_grants", "measured_chunks",
+        "rate_limits", "settings", "stripe_customers", "stripe_events", "subscriptions", "topups", "usage",
       ].sort(),
     );
 

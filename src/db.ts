@@ -897,6 +897,43 @@ export async function recordTopup(
   return (res.meta?.changes ?? 0) > 0;
 }
 
+// --- Measured chunks (F-21) --------------------------------------------------
+
+/** How long a provider's measurement of a chunk is kept for a second pass on it. */
+export const MEASURED_CHUNK_SECONDS = 24 * 3600;
+
+/**
+ * Remember what a provider measured these exact bytes to be, for this account.
+ * A later measurement of the same bytes replaces an earlier one: it is the
+ * same audio, so the newest reading is as good as any.
+ */
+export async function recordMeasuredChunk(db: D1Database, accountId: string, chunkHash: string, seconds: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO measured_chunks (account_id, chunk_hash, seconds, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (account_id, chunk_hash) DO UPDATE SET seconds = excluded.seconds, created_at = excluded.created_at`,
+    )
+    .bind(accountId, chunkHash, Math.ceil(seconds), Math.floor(Date.now() / 1000))
+    .run();
+}
+
+/** The provider's measurement of these bytes for this account, if one is recent enough; else null. */
+export async function measuredChunk(db: D1Database, accountId: string, chunkHash: string): Promise<number | null> {
+  const row = await db
+    .prepare("SELECT seconds FROM measured_chunks WHERE account_id = ? AND chunk_hash = ? AND created_at > ?")
+    .bind(accountId, chunkHash, Math.floor(Date.now() / 1000) - MEASURED_CHUNK_SECONDS)
+    .first<{ seconds: number }>();
+  return row ? row.seconds : null;
+}
+
+/** Drop measurements older than MEASURED_CHUNK_SECONDS. Run by the hourly cron. */
+export async function sweepMeasuredChunks(db: D1Database): Promise<void> {
+  await db
+    .prepare("DELETE FROM measured_chunks WHERE created_at <= ?")
+    .bind(Math.floor(Date.now() / 1000) - MEASURED_CHUNK_SECONDS)
+    .run();
+}
+
 // --- Deleting an account -----------------------------------------------------
 
 /** Every device an account ever had, removed ones included: each has a relay object to clear. */
@@ -951,6 +988,7 @@ export async function deleteAccountData(db: D1Database, accountId: string, subHa
     db.prepare("DELETE FROM settings WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM drive_grants WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM usage WHERE account_id = ?").bind(accountId),
+    db.prepare("DELETE FROM measured_chunks WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM allowances WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM topups WHERE account_id = ?").bind(accountId),
     db.prepare("DELETE FROM subscriptions WHERE account_id = ?").bind(accountId),
