@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
 import { mp4DurationSeconds } from "../src/mp4";
 import { GLOBAL_CEILING, TRIAL_ALLOWANCE } from "../src/proxy";
@@ -760,6 +760,16 @@ describe("which transcription provider gets the audio", () => {
 });
 
 describe("a chunk the Mac found hard to hear", () => {
+  // These describe the pass as built. It is off in production (F-21), so
+  // each test here switches it on and the first test below shows it off.
+  const switched = env as { HIGH_QUALITY_PASS?: string };
+  beforeEach(() => {
+    switched.HIGH_QUALITY_PASS = "on";
+  });
+  afterEach(() => {
+    delete switched.HIGH_QUALITY_PASS;
+  });
+
   const GROQ = "https://api.groq.com/openai/v1/audio/transcriptions";
   const OPENAI = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -813,6 +823,18 @@ describe("a chunk the Mac found hard to hear", () => {
     const body = (await (await postAudio(m4aForm(480, 480), bearer(token))).json()) as Record<string, unknown>;
     expect(body.provider).toBe("openai");
     expect(body).not.toHaveProperty("segments");
+  });
+
+  it("is refused while the pass is switched off, before any call or charge", async () => {
+    delete switched.HIGH_QUALITY_PASS;
+    const calls = upstream(() => new Response(JSON.stringify({ text: "x" }), { status: 200 }));
+    const { account, token } = await claimDevice("high-off@example.com");
+
+    const res = await postAudio(highForm(480), bearer(token));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "quality_unavailable" });
+    expect(calls).toHaveLength(0);
+    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(0);
   });
 
   it("goes to gpt-4o-transcribe alone, and charges three times the chunk", async () => {
