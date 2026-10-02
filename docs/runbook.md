@@ -21,6 +21,8 @@ for row (5 accounts, 208 usage rows, 17 migrations).
   retry. Check the provider's status page before touching this service.
 - `npm run split` shows which provider transcription actually went to this
   month and what it cost.
+- `node scripts/scan-logs.mjs <capture>` checks a `wrangler tail --format
+  json` capture for personal data or secrets in what the Worker logged.
 
 ## Roll back the Worker
 
