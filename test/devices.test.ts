@@ -12,6 +12,8 @@ describe("claiming a panel", () => {
     expect(body.verification_uri).toBe("https://accounts.test/device");
     expect(String(body.verification_uri_complete)).toContain("code=" + body.user_code);
     expect(body.interval).toBe(5);
+    // ASVS 2.7.2: an out-of-band code lives no longer than ten minutes (F-17).
+    expect(body.expires_in).toBe(600);
   });
 
   it("is pending until a person approves it", async () => {

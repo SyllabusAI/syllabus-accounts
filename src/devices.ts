@@ -21,7 +21,9 @@ import { browserOnly, sameOrigin, sessionSignedInAt, setSession } from "./sessio
 import { newDeviceToken, newUserCode, normalizeUserCode, plusSeconds, randomId, sha256Hex } from "./util";
 import { log } from "./log";
 
-export const CODE_SECONDS = 900;
+// Ten minutes: ASVS 2.7.2's ceiling for an out-of-band code (F-17). The Mac
+// reads `expires_in` and shows what is left, so nothing there assumes 15.
+export const CODE_SECONDS = 600;
 export const POLL_INTERVAL = 5;
 const PROFILES = new Set(["syllabus", "sous"]);
 

@@ -23,8 +23,8 @@ Findings carry the IDs from [threat-model-0.6.md](threat-model-0.6.md).
 |---|---|
 | Fail, **High** (blocking) | S2.8 (F-02) |
 | Fail or Partly, Medium | 3.3.1 (F-03, plain logout); S1.9 (F-04); S4.7 (F-06); S5.2, S5.3 (F-07) |
-| Fail or Partly, Low | 2.7.2 (F-17), 8.2.1 (F-20), 14.4.2 (accepted), 14.4.3 (relayed pages), S3.7 (F-11), S4.8 (F-10, F-12) |
-| Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08) |
+| Fail or Partly, Low | 14.4.2 (accepted), 14.4.3 (relayed pages), S3.7 (F-11), S4.8 (F-10, F-12) |
+| Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08); 2.7.2 (F-17); 8.2.1 (F-20) |
 | Unverified | 8.3.3, 9.1.2, 9.1.3 (and the "Always Use HTTPS" note under 9.1.1) |
 | Everything else | Pass or N/A, each with its reason |
 
@@ -53,7 +53,7 @@ Sign-in is Google OpenID Connect; the service never sees a password.
 | 2.5.4 | No default or shared accounts | Pass | Accounts are created only at a Google sign-in (`src/db.ts:15`) |
 | 2.5.6 | Secure credential recovery | N/A | Delegated to Google |
 | 2.7.1 | Out of band verifier not via PSTN | N/A | No SMS or voice. The device code is applied by analogy below |
-| 2.7.2 | Out of band request, code or token expires after 10 minutes | Fail (Low) | A device code lives 15 minutes (`src/devices.ts:24` `CODE_SECONDS = 900`). RFC 8628 permits it; ASVS is stricter. Accept, or set 600. F-17 |
+| 2.7.2 | Out of band request, code or token expires after 10 minutes | Pass | Fixed 2026-10-02: a device code lives 10 minutes (`CODE_SECONDS = 600` in `src/devices.ts`); `test/devices.test.ts` "hands out a code a person can type" checks `expires_in`. F-17 |
 | 2.7.3 | Out of band verifier usable once | Pass | Approval is a conditional update (`src/db.ts:237`), collection likewise (`:253`); `test/devices.test.ts` "hands the token out once", "refuses a code that was already used" |
 | 2.7.4 | Out of band over a secure channel | Pass | TLS only (see V9) |
 | 2.8.1 | Time-based OTP has a defined lifetime | N/A | No OTP |
@@ -139,7 +139,7 @@ runbook says 32 random bytes).
 
 | ID | Requirement | Result | Evidence |
 |---|---|---|---|
-| 8.2.1 | Anti-caching headers on sensitive data | Fail (Low) | HTML gets `Cache-Control: no-store` (`src/headers.ts:58`). JSON answers (`/me`, `/settings/*`, `/drive/status`, `/proxy/usage`) carry none. Without a validator a browser does not cache them and Workers responses are not edge cached by default, so the risk is small. Fix: default `no-store` for every response. F-20 |
+| 8.2.1 | Anti-caching headers on sensitive data | Pass | Fixed 2026-10-02: `securityHeaders` adds `Cache-Control: no-store` to every HTML and JSON answer that does not set its own (`src/headers.ts`); relayed panels default to `no-store` in the relay. `test/security.test.ts` "puts the safe headers". F-20 |
 | 8.2.2 | No sensitive data in browser storage | Pass | No script, no storage |
 | 8.2.3 | Client-side data cleared after the session | N/A | Nothing is kept client-side |
 | 8.3.1 | Sensitive data not in the URL | Pass | A single-use OAuth code (standard), a single-use 60 second ticket, and a device *user code*, which is not a credential until approved |
@@ -159,7 +159,7 @@ runbook says 32 random bytes).
 
 | ID | Requirement | Result | Evidence |
 |---|---|---|---|
-| 10.3.2 | No code loaded from untrusted sources; integrity protections | Pass | No third-party script or stylesheet on any page (CSP would block it); dependencies from a lockfile (`npm ci` in `.github/workflows/ci.yml`). Actions are tag-pinned, not SHA-pinned (F-19, Low) |
+| 10.3.2 | No code loaded from untrusted sources; integrity protections | Pass | No third-party script or stylesheet on any page (CSP would block it); dependencies from a lockfile (`npm ci` in `.github/workflows/ci.yml`). Every GitHub Action is pinned to a full commit SHA, the release in a comment (F-19, fixed 2026-10-02) |
 
 ## V11 Business logic
 
@@ -227,7 +227,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S1.4 | Unused tokens expire | Pass | 90 idle days, sliding, `test/expiry.test.ts` |
 | S1.5 | One Mac or all can be revoked, and a thief's replacements die with the token | Pass | `src/db.ts:87`, `:123`; `test/devices.test.ts` "signing out every Mac" |
 | S1.6 | Device code (`device_code`) unguessable and hashed | Pass | 256 bits (`randomId(32)`), stored as SHA-256 (`src/devices.ts:106`, `:113`) |
-| S1.7 | User code hard to guess in the window | Pass | 32^8, about 10^12, 15 minutes, 500 pending, 30 approvals per 10 minutes per account and 300 per address |
+| S1.7 | User code hard to guess in the window | Pass | 32^8, about 10^12, 10 minutes, 500 pending, 30 approvals per 10 minutes per account and 300 per address |
 | S1.8 | Only a browser session can approve a code | Pass | `browserOnly` and `sameOrigin` (`src/devices.ts:150-154`) |
 | S1.9 | The approver can tell whose Mac they are enrolling | **Fail (Medium)** | The page shows a Mac name the requester chose (80 characters, `src/devices.ts:83`) and nothing else; `verification_uri_complete` prefills the code (`:119`). One click enrolls an attacker's Mac into the victim's account. F-04 |
 | S1.10 | Token stored safely on the Mac | Pass (Low note) | 0600 file in a 0700 directory, atomic write (LectureAI `intake/config.py` `write_private`). A Keychain item would be stronger |

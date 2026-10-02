@@ -102,7 +102,7 @@ Open: tokens do not expire yet (a separate PR adds expiry).
 **2. Guessing a device code to capture somebody else's Mac.**
 A captured code would give the victim's panel a token for the guesser's
 account, filing the victim's notes into the guesser's Drive. Codes are 8
-characters from a 32-letter alphabet (about 10^12), live 15 minutes, at most
+characters from a 32-letter alphabet (about 10^12), live 10 minutes, at most
 500 pending. Lookups and approvals are limited per account and per address.
 
 **3. Cross-site requests with the session cookie.**
