@@ -119,11 +119,11 @@ portal configuration is saved once. Settings > Billing > Customer portal:
 
 ### Checkout settings
 
-- Settings > Payments > Payment methods: **cards (and wallets) only.** A
-  top-up is granted on `checkout.session.completed` only when the session is
-  already `paid`; the webhook does not listen for
-  `checkout.session.async_payment_succeeded`, so a bank debit or other
-  delayed method would take the money and never grant the hours.
+- Settings > Payments > Payment methods: **cards (and wallets) are the
+  plan.** A top-up paid by a delayed method (a bank debit, say) is granted
+  when `checkout.session.async_payment_succeeded` arrives, so turning one on
+  no longer loses hours. Account deletion still refunds only a card
+  payment, so keep delayed methods off unless that changes.
 - Settings > Checkout and Payment Links: the business name and branding
   customers will see.
 
@@ -136,6 +136,7 @@ Developers > Webhooks > Add endpoint (in live mode):
   them from the code, so trust its output if this list and the code ever
   disagree):
   - `checkout.session.completed`
+  - `checkout.session.async_payment_succeeded`
   - `customer.subscription.created`
   - `customer.subscription.updated`
   - `customer.subscription.deleted`
@@ -164,8 +165,8 @@ Developers > Webhooks > Add endpoint (in live mode):
   | Invoices | **Read** | see below |
   | Everything else | None | |
 
-  **Invoices: Read is not in the list in `src/env.ts`, and probably has to
-  be.** `endSubscription` cancels with `expand: ["latest_invoice"]` and then
+  **Invoices: Read is in the list in `src/env.ts` as of 2026-10-01, from
+  reading the code rather than a sandbox run.** `endSubscription` cancels with `expand: ["latest_invoice"]` and then
   calls `invoicePayments.list` on that invoice to find the charge to refund,
   both through this key. A restricted key without read access to invoices is
   likely to have one or both of those refused. If the cancel itself is

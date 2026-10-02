@@ -102,8 +102,10 @@ export type Bindings = {
   STRIPE_SECRET_KEY?: string;
   /**
    * Secret, OPTIONAL: a Stripe key restricted to Subscriptions, Refunds and
-   * Customers (write), used only to cancel a subscription, refund its unused
-   * time, and delete a customer (deletionStripeClient in stripe.ts).
+   * Customers (write) and Invoices (read), used only to cancel a subscription,
+   * refund its unused time, and delete a customer (deletionStripeClient in
+   * stripe.ts). Invoices: Read is for the refund, which expands the canceled
+   * subscription's latest invoice and lists that invoice's payments.
    * `wrangler secret put STRIPE_ACCOUNT_DELETION_KEY`.
    *
    * A separate key from STRIPE_SECRET_KEY, which every request to Checkout
