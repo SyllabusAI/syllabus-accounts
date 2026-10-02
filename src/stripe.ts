@@ -65,6 +65,7 @@ const PROTECTED_SOURCES = new Set(["owner"]);
 /** The events that change what somebody is entitled to. Everything else is noted and ignored. */
 const HANDLED = new Set([
   "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
@@ -153,7 +154,8 @@ export function stripeClient(env: Pick<Bindings, "STRIPE_SECRET_KEY">): Stripe {
  * account deletion (leaveStripe in billing.ts) and the orphan cleanup below.
  *
  * Built from STRIPE_ACCOUNT_DELETION_KEY, a key restricted to Subscriptions,
- * Refunds and Customers (write), rather than STRIPE_SECRET_KEY, which every
+ * Refunds and Customers (write) and Invoices (read), rather than
+ * STRIPE_SECRET_KEY, which every
  * Checkout and Billing Portal request spends. A leak of that key then cannot
  * cancel a subscription, issue a refund, or delete a customer. Falls back to
  * STRIPE_SECRET_KEY when the restricted key is not yet set, so this behaves
@@ -190,7 +192,10 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
     return "";
   }
 
-  if (event.type === "checkout.session.completed") {
+  // A delayed payment method (a bank debit, say) completes the session unpaid
+  // and pays it later in an event of its own, carrying the same session. Both
+  // go through here, and the session id stops the two granting a top-up twice.
+  if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
     const session = event.data.object as Stripe.Checkout.Session;
     const accountId = idOf(session.client_reference_id) || idOf(session.metadata?.account_id);
     const customerId = idOf(session.customer);

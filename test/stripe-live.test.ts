@@ -184,6 +184,7 @@ describe("what the operator is told to set up", () => {
   it("lists the events the webhook handler actually handles", () => {
     expect(live.handledEvents(stripeSource)).toEqual([
       "checkout.session.completed",
+      "checkout.session.async_payment_succeeded",
       "customer.subscription.created",
       "customer.subscription.updated",
       "customer.subscription.deleted",

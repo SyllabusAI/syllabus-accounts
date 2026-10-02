@@ -244,6 +244,18 @@ describe("replay", () => {
     expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
   });
 
+  it("grants a top-up paid by a delayed method when the payment succeeds, once", async () => {
+    const { account } = await signedInAs("topup-async@example.com");
+    const base = { id: "cs_async", mode: "payment", customer: "cus_async", client_reference_id: account.id };
+    await deliver(sessionEvent({ ...base, payment_status: "unpaid" }));
+    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(0);
+    const paid = { ...sessionEvent({ ...base, payment_status: "paid" }), type: "checkout.session.async_payment_succeeded" };
+    expect((await deliver(paid)).status).toBe(200);
+    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
+    await deliver({ ...paid, id: eventId() });
+    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
+  });
+
   it("does not let a replayed old event undo a newer one", async () => {
     const account = await subscriber("replay-old@example.com", "cus_replay_old");
     const created = subEvent("customer.subscription.created", { id: "sub_ro", customer: "cus_replay_old" });
