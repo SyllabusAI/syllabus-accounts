@@ -198,6 +198,7 @@ export async function scheduled(_event: ScheduledController, env: Bindings, ctx:
         );
       }
       await db.sweepRateLimits(env.DB, Math.floor(Date.now() / 1000) - 3600);
+      await db.sweepMeasuredChunks(env.DB);
     })(),
   );
   // Its own task, so a failure in the sweeps above cannot starve it (or the reverse).

@@ -779,6 +779,10 @@ describe("a chunk the Mac found hard to hear", () => {
     return form;
   }
 
+  /** Groq answers the standard pass with a measured duration; OpenAI answers the high pass. */
+  const bothLegs = (groqSeconds: number, high: () => Response = () => new Response(JSON.stringify({ text: "the clearer transcript" }), { status: 200 })) =>
+    (url: string) => (url === GROQ ? new Response(JSON.stringify({ text: "first", duration: groqSeconds }), { status: 200 }) : high());
+
   const segment = (over: Record<string, unknown> = {}) => ({
     id: 0, start: 0, end: 4.2, avg_logprob: -0.31, no_speech_prob: 0.02, compression_ratio: 1.4, text: " Today we start costing.", ...over,
   });
@@ -838,43 +842,112 @@ describe("a chunk the Mac found hard to hear", () => {
   });
 
   it("goes to gpt-4o-transcribe alone, and charges three times the chunk", async () => {
-    const calls = upstream(() => new Response(JSON.stringify({ text: "the clearer transcript" }), { status: 200 }));
+    const calls = upstream(bothLegs(480));
     const { account, token } = await claimDevice("high@example.com");
+    expect((await postAudio(m4aForm(480, 480), bearer(token))).status).toBe(200);
 
     const res = await postAudio(highForm(480), bearer(token));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       text: "the clearer transcript", audio_seconds: 480, charged_seconds: 1440, quality: "high", provider: "openai-high",
     });
-    expect(calls.map((c) => c.url)).toEqual([OPENAI]);
-    const sent = calls[0].init.body as FormData;
+    expect(calls.map((c) => c.url)).toEqual([GROQ, OPENAI]);
+    const sent = calls[1].init.body as FormData;
     expect(sent.get("model")).toBe("gpt-4o-transcribe");
     expect(sent.get("response_format")).toBe("json");
     expect(sent.get("quality")).toBeNull();
-    const rows = await env.DB.prepare("SELECT provider, units, state FROM usage WHERE account_id = ?").bind(account.id).all();
-    expect(rows.results).toEqual([{ provider: "openai-high", units: 1440, state: "final" }]);
+    const rows = await env.DB.prepare("SELECT provider, units, state FROM usage WHERE account_id = ? ORDER BY units").bind(account.id).all();
+    expect(rows.results).toEqual([
+      { provider: "groq", units: 480, state: "final" },
+      { provider: "openai-high", units: 1440, state: "final" },
+    ]);
   });
 
   it("never falls back to a cheaper model at the higher rate", async () => {
-    const calls = upstream(() => new Response("overloaded", { status: 503 }));
+    const calls = upstream(bothLegs(480, () => new Response("overloaded", { status: 503 })));
     const { account, token } = await claimDevice("high-down@example.com");
+    await postAudio(m4aForm(480, 480), bearer(token));
 
     const res = await postAudio(highForm(480), bearer(token));
     expect(res.status).toBe(502);
-    expect(calls.map((c) => c.url)).toEqual([OPENAI]);
-    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(0);
+    expect(calls.map((c) => c.url)).toEqual([GROQ, OPENAI]);
+    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(480);
   });
 
   it("refuses a second pass the allowance cannot cover, before any call", async () => {
-    const calls = upstream(() => new Response(JSON.stringify({ text: "x" }), { status: 200 }));
+    const calls = upstream(bothLegs(480));
     const { account, token } = await claimDevice("high-capped@example.com");
-    // 480 seconds would fit; 1,440 does not.
+    // The first pass's 480 seconds fit; another 1,440 do not.
     await db.putAllowance(env.DB, account.id, grant(1000, TRIAL_ALLOWANCE.summary_tokens));
+    await postAudio(m4aForm(480, 480), bearer(token));
 
     const res = await postAudio(highForm(480), bearer(token));
     expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ error: "allowance_exhausted", kind: "transcribe", used: 0, allowance: 1000 });
+    expect(await res.json()).toMatchObject({ error: "allowance_exhausted", kind: "transcribe", used: 480, allowance: 1000 });
+    expect(calls.map((c) => c.url)).toEqual([GROQ]);
+  });
+
+  it("refuses a second pass on audio no standard pass measured, before any call or charge (F-21)", async () => {
+    const calls = upstream(bothLegs(480));
+    const { account, token } = await claimDevice("high-unmeasured@example.com");
+
+    const res = await postAudio(highForm(480), bearer(token));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: "first_pass_required" });
     expect(calls).toHaveLength(0);
+    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(0);
+  });
+
+  it("bills a second pass on what the provider measured, not on a header that lies (F-21)", async () => {
+    // 1,500 seconds of low-bitrate speech whose header says 1 second: the
+    // byte floor alone would charge ceil(60,000 / 24,000) = 3 seconds.
+    upstream(bothLegs(1500));
+    const { account, token } = await claimDevice("high-liar@example.com");
+    const lying = () => m4aForm(1, 1, 60_000);
+
+    const first = (await (await postAudio(lying(), bearer(token))).json()) as { audio_seconds: number };
+    expect(first.audio_seconds).toBe(1500);
+    const form = lying();
+    form.set("quality", "high");
+    const second = (await (await postAudio(form, bearer(token))).json()) as { charged_seconds: number };
+    expect(second.charged_seconds).toBe(4500);
+    expect(await db.usedThisPeriod(env.DB, account.id, "transcribe")).toBe(1500 + 4500);
+  });
+
+  it("takes no measurement from another account, or from an OpenAI first pass (F-21)", async () => {
+    upstream(bothLegs(480));
+    const other = await claimDevice("high-other@example.com");
+    await postAudio(m4aForm(480, 480), bearer(other.token));
+    const mine = await claimDevice("high-mine@example.com");
+    expect((await postAudio(highForm(480), bearer(mine.token))).status).toBe(409);
+
+    // Groq refuses, OpenAI transcribes and reports no length: nothing is kept to bill a second pass on.
+    upstream((url) => (url === GROQ ? new Response("busy", { status: 429 }) : new Response("from openai", { status: 200 })));
+    const fallback = await claimDevice("high-fallback@example.com");
+    expect((await postAudio(m4aForm(480, 480), bearer(fallback.token))).status).toBe(200);
+    expect((await postAudio(highForm(480), bearer(fallback.token))).status).toBe(409);
+  });
+
+  it("keeps no measurement at all while the pass is switched off", async () => {
+    delete switched.HIGH_QUALITY_PASS;
+    upstream(bothLegs(480));
+    const { account, token } = await claimDevice("high-off-nothing-kept@example.com");
+    expect((await postAudio(m4aForm(480, 480), bearer(token))).status).toBe(200);
+    const kept = await env.DB.prepare("SELECT COUNT(*) AS n FROM measured_chunks WHERE account_id = ?").bind(account.id).first<{ n: number }>();
+    expect(kept!.n).toBe(0);
+  });
+
+  it("forgets a measurement after a day, and the cron sweeps it", async () => {
+    upstream(bothLegs(480));
+    const { account, token } = await claimDevice("high-stale@example.com");
+    await postAudio(m4aForm(480, 480), bearer(token));
+    const dayAgo = Math.floor(Date.now() / 1000) - db.MEASURED_CHUNK_SECONDS;
+    await env.DB.prepare("UPDATE measured_chunks SET created_at = ? WHERE account_id = ?").bind(dayAgo, account.id).run();
+
+    expect((await postAudio(highForm(480), bearer(token))).status).toBe(409);
+    await db.sweepMeasuredChunks(env.DB);
+    const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM measured_chunks WHERE account_id = ?").bind(account.id).first<{ n: number }>();
+    expect(left!.n).toBe(0);
   });
 
   it("counts a second pass as its own line on /proxy/usage", async () => {
