@@ -4,7 +4,8 @@ HOME-STRETCH "The security bar", item 4: a manual pass against ASVS Level 1
 and the Syllabus-specific surface (device tokens, the relay Durable Object,
 the Drive grant). Done 2026-09-29 against `syllabus-accounts` `main` at
 `64253e3`, by reading the source and running the test suite (384 tests
-passing before this branch's additions).
+passing before this branch's additions). **Re-checked 2026-10-02** against
+`main` at `23b19f8` (635 tests passing): rows whose result changed say so.
 
 Requirement numbers follow **ASVS 4.0.3**, and the wording is abbreviated to
 what was checked. If you audit against ASVS 5.0, the chapters are reorganized;
@@ -20,19 +21,19 @@ Findings carry the IDs from [threat-model-0.6.md](threat-model-0.6.md).
 
 | Result | Rows |
 |---|---|
-| Fail, **High** (blocking) | 11.1.3, S4.4 (F-01); S2.8 (F-02) |
-| Fail, Medium | 3.3.1, 3.4.4 (F-03); S1.9 (F-04); S4.7 (F-06); S5.2, S5.3 (F-07); S3.6 (F-08) |
-| Fail, Low | 2.7.2, 8.2.1, 14.4.2 (accepted), 14.4.3 (relayed pages), S3.7, S4.8 |
+| Fail, **High** (blocking) | S2.8 (F-02) |
+| Fail or Partly, Medium | 3.3.1 (F-03, plain logout); S1.9 (F-04); S4.7 (F-06); S5.2, S5.3 (F-07) |
+| Fail or Partly, Low | 2.7.2 (F-17), 8.2.1 (F-20), 14.4.2 (accepted), 14.4.3 (relayed pages), S3.7 (F-11), S4.8 (F-10, F-12) |
+| Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08) |
 | Unverified | 8.3.3, 9.1.2, 9.1.3 (and the "Always Use HTTPS" note under 9.1.1) |
 | Everything else | Pass or N/A, each with its reason |
 
 F-05 (a browser session is remote control of the Mac's panel) is not a failed
 row: it is the product working as designed, triaged in the threat model.
 
-**Blocking for launch:** F-01 (the transcription meter trusts a length the
-caller writes) and F-02 (`PANEL_ORIGIN` is empty, so relayed panels run on the
-account origin). Both have small fixes described in the threat model. There
-are no critical findings.
+**Blocking for launch:** F-02 (`PANEL_ORIGIN` is empty, so relayed panels run
+on the account origin), until it is set or accepted in writing. F-01 was fixed
+by PR #51 and F-21 by PR #62. There are no critical findings.
 
 ## V1 Architecture
 
@@ -68,14 +69,14 @@ adds a second, per-device cookie (`src/panel-host.ts`).
 | 3.2.1 | A new session token on authentication | Pass | `setSession` mints a new signed value at every sign-in (`src/google.ts:210`, `src/session.ts:38`) |
 | 3.2.2 | Session tokens have at least 64 bits of entropy | Pass | The value is an HMAC-SHA256 over `{account, issued}` under `SESSION_SECRET`; it cannot be guessed or forged without the secret. Refused outright when the secret is unset (`src/session.ts:34`, `test/security.test.ts` "the session secret") |
 | 3.2.3 | Tokens kept in the browser only with secure methods | Pass | A cookie; the pages contain no script, so nothing reads or stores it elsewhere (`src/headers.ts:29`) |
-| 3.3.1 | Logout and expiration invalidate the session | **Fail (Medium)** | Logout clears the cookie (`src/session.ts:49-51`, `src/google.ts:214`) but nothing server-side ends the session, so a copied cookie works until it expires in 30 days. "Sign out every Mac" leaves browsers signed in (`src/db.ts:123` bumps `token_version`, which `readSession` never checks). F-03. Fix: put `token_version` in the cookie |
+| 3.3.1 | Logout and expiration invalidate the session | **Partly (Medium)** | Re-checked 2026-10-02. "Sign out everywhere" bumps `session_version`, which the cookie carries and `sessionMiddleware` checks, so it ends every browser session (PR #55; `test/session-version.test.ts`); bulk revoke bumps it too. A plain logout still only clears the cookie, so a copied cookie survives an ordinary sign-out until it expires in 30 days. F-03 |
 | 3.3.2 | Periodic re-authentication (30 days at L1) | Pass | Absolute 30 days (`src/session.ts:19`, checked at `:70`) |
 | 3.4.1 | Cookie `Secure` | Pass | `secure: PUBLIC_URL.startsWith("https://")` (`src/session.ts:43`); production is https |
 | 3.4.2 | Cookie `HttpOnly` | Pass | `src/session.ts:42`, and the panel cookie `src/panel-host.ts:214` |
 | 3.4.3 | Cookie `SameSite` | Pass | `Lax` (`src/session.ts:44`). Not relied on alone; see 4.2.2 |
-| 3.4.4 | Cookie uses the `__Host-` prefix | **Fail (Medium)** | Name is `syllabus_accounts_session` (`src/session.ts:18`). A sibling host could plant a lone cookie. Duplicates are refused (`:56`) but a lone planted one is not. Renaming signs everyone out once. F-03 |
+| 3.4.4 | Cookie uses the `__Host-` prefix | Pass | Re-checked 2026-10-02: `__Host-syllabus_accounts_session` and `__Host-..._signin`; the old names are expired and never read (PR #48; `test/session-cookie.test.ts`). F-03 |
 | 3.4.5 | Most precise `Path` when the domain hosts other apps | Pass | Account cookie is host-only (no Domain), path `/`; the panel cookie is scoped to `/p/<device>/` (`src/panel-host.ts:204`) |
-| 3.5.3 | Stateless tokens are signed against tampering, replay, null cipher, key substitution | Pass | HMAC-SHA256 via Hono's signed cookies; separate derived keys for panel tickets and panel cookies with their own labels (`src/panel-host.ts:57-58`, `:97`). Replay within 30 days is the same gap as 3.3.1 |
+| 3.5.3 | Stateless tokens are signed against tampering, replay, null cipher, key substitution | Pass | HMAC-SHA256 via Hono's signed cookies; separate derived keys for panel tickets and panel cookies with their own labels (`src/panel-host.ts`). Replay is closable by a `session_version` bump (3.3.1) |
 | 3.7.1 | Re-authentication or a full session before sensitive transactions | Pass | Account deletion needs a Google sign-in in the last 10 minutes and the typed email (`src/account.ts:80-125`). Other sensitive actions need the session plus a same-origin post |
 
 ## V4 Access control
@@ -87,7 +88,7 @@ adds a second, per-device cookie (`src/panel-host.ts`).
 | 4.1.3 | Least privilege | Pass | A device token cannot administer the account (approve, remove, Drive connect or disconnect, billing, delete). `test/devices.test.ts` "a device token is not a person" |
 | 4.1.5 | Access controls fail securely | Pass | Missing `SESSION_SECRET` refuses (`src/session.ts:34`); missing webhook secret refuses every delivery (`src/stripe.ts:72`); a bad `PANEL_ORIGIN` relays nothing (`src/relay.ts:150-154`); a dead bearer never falls back to a cookie (`test/isolation.test.ts`) |
 | 4.2.1 | No IDOR on sensitive data and APIs | Pass | Every query is scoped by account in SQL. `test/isolation.test.ts` (PR #42): settings, Drive grants, usage, study sessions, two credentials, revocation |
-| 4.2.2 | Strong anti-CSRF on authenticated functionality | Pass (main); stronger on `liam/csrf-audit` | Every cookie mutation checks `sameOrigin` (`src/session.ts:116`); `test/attacks.test.ts` "a form cannot be posted from anywhere but this origin". The branch adds a central `crossSiteGuard` and `Sec-Fetch-Site`; not merged |
+| 4.2.2 | Strong anti-CSRF on authenticated functionality | Pass | Re-checked 2026-10-02: the central `crossSiteGuard` (`Sec-Fetch-Site` plus `sameOrigin`) runs on every route (`app.use("*")`, PR #48); `test/csrf.test.ts` "every cookie-authenticated route that changes something refuses another site" |
 | 4.3.1 | Administrative interfaces use MFA | N/A | There is no administrative interface; operators use Cloudflare, GitHub and Stripe directly (F-07) |
 | 4.3.2 | No directory browsing, no metadata files served | Pass | The Worker serves no static files; unmatched paths are 404 (`src/index.ts:145`) |
 
@@ -107,7 +108,7 @@ adds a second, per-device cookie (`src/panel-host.ts`).
 | 5.2.5 | No template injection | Pass | No template engine; template literals with escaping |
 | 5.2.6 | No SSRF | Pass | Every outbound URL is a constant (Google, Stripe, Groq, OpenAI, Anthropic: `src/google.ts:31-33`, `src/drive.ts` `REVOKE_URL`, `src/proxy.ts:82-88`); no URL from a caller is fetched |
 | 5.2.7, 5.2.8 | SVG, sandboxed scripting | N/A | Neither exists |
-| 5.3.1-5.3.3 | Output encoding for context, charset, XSS | Pass | HTML escaped; JSON via `c.json`; CSP `default-src 'none'` on every page the Worker writes (`src/headers.ts:29-35`) |
+| 5.3.1-5.3.3 | Output encoding for context, charset, XSS | Pass | HTML escaped; JSON via `c.json`; a hash-based CSP with no script on every page the Worker writes (`pagePolicy` in `src/headers.ts`, PR #49; `test/csp.test.ts`) |
 | 5.3.4, 5.3.5 | Parameterized queries | Pass | Every query uses `.bind()`; the only interpolations are constants (`src/db.ts:889`, `src/assistant.ts` `undoTake`) |
 | 5.3.6 | No JavaScript or JSON injection | Pass | No script on any page the Worker writes |
 | 5.3.7-5.3.10 | LDAP, OS command, file inclusion, XPath | N/A | None exist |
@@ -143,7 +144,7 @@ runbook says 32 random bytes).
 | 8.2.3 | Client-side data cleared after the session | N/A | Nothing is kept client-side |
 | 8.3.1 | Sensitive data not in the URL | Pass | A single-use OAuth code (standard), a single-use 60 second ticket, and a device *user code*, which is not a credential until approved |
 | 8.3.2 | Users can remove or export their data | Pass | `/account/delete` removes every row (`src/account.ts`, `src/db.ts:889`); Stripe and Drive are ended first. There is no export route, which the "or" allows |
-| 8.3.3 | Clear privacy language, consent updated | Unverified | Pages exist (`src/pages.ts` `privacyPage`); the paid-launch text is draft PR #45. Not judged here |
+| 8.3.3 | Clear privacy language, consent updated | Unverified | `/privacy` and `/terms` are live (PR #45, merged 2026-09-29) but the lawyer has not reviewed them and the owners have not signed off. Not judged here |
 | 8.3.4 | Sensitive data identified and protected | Pass | The asset tables in [threat-model.md](threat-model.md) and [threat-model-0.6.md](threat-model-0.6.md) |
 
 ## V9 Communications
@@ -166,8 +167,8 @@ runbook says 32 random bytes).
 |---|---|---|---|
 | 11.1.1 | Steps processed in order, none skipped | Pass | Device claim: pending, approved, collected, in that order and once each (`src/devices.ts:171-183`, `:208-213`); checkout precedes an allowance, which only the webhook writes |
 | 11.1.2 | Flows processed in realistic human time | Pass | Approval is limited to 30 per 10 minutes per account (`src/limits.ts:56`), sign-in per address, proxy to 20 and 5 per minute (`src/proxy.ts:140`) |
-| 11.1.3 | Limits on business actions, enforced per user | **Fail (High)** | The transcription allowance is enforced per account but the seconds it counts come from a header the caller writes (`src/proxy.ts:398-401`, `src/mp4.ts:61`). 12 MiB is charged as 1 second. `test/threat-model-claims.test.ts` "the transcription meter" (`it.fails`). **F-01, blocks launch** |
-| 11.1.4 | Anti-automation against exhaustion and excessive uploads | Pass except F-01 | Rate limits, body caps counted as bytes arrive (`src/proxy.ts:257`), pending-code cap (`src/devices.ts:73`), global spend ceiling (`src/proxy.ts:160`, `src/db.ts:518`). `docs/rate-limits.md` (PR #47) lists every route |
+| 11.1.3 | Limits on business actions, enforced per user | Pass | Re-checked 2026-10-02. F-01 is fixed: the charge is at least `bytes / 24000` up front and settles up to the provider's measured duration (PR #51; `test/meter-floor.test.ts`, `test/threat-model-claims.test.ts` "the transcription meter", no longer `it.fails`). F-21 (the `quality=high` pass has no measured duration to settle to) is closed by refusing that pass until it is bound to one (PR #62) |
+| 11.1.4 | Anti-automation against exhaustion and excessive uploads | Pass | Rate limits, body caps counted as bytes arrive, the pending-code cap, the global spend ceiling (`GLOBAL_CEILING`); `test/spend-limits.test.ts`, `docs/rate-limits.md` (PR #47) lists every route |
 
 ## V12 Files and resources
 
@@ -193,14 +194,14 @@ runbook says 32 random bytes).
 
 | ID | Requirement | Result | Evidence |
 |---|---|---|---|
-| 14.2.1 | Components current and free of known vulnerabilities | Pass | `npm audit --omit=dev`: 0 vulnerabilities (2026-09-29). `npm audit` including dev tooling: 4 moderate, all one advisory in `undici` inside `miniflare`/`wrangler`/`vitest-pool-workers`, used by the local test runner and not part of the deployed bundle. Dependabot alerts are off (F-07) |
+| 14.2.1 | Components current and free of known vulnerabilities | Pass | `npm audit --omit=dev`: 0 vulnerabilities (2026-10-02). `npm audit` including dev tooling: 3 moderate and 1 high, all in `undici` inside `miniflare`/`wrangler`/`vitest-pool-workers`, used by the local test runner and not part of the deployed bundle. Dependabot alerts are off (F-07) |
 | 14.2.2 | Unneeded features and sample content removed | Pass | Nothing beyond the routes in the route table |
 | 14.2.3 | Assets from a CDN carry integrity checks | N/A | No external assets |
 | 14.3.2 | Debug modes off | Pass | No debug routes; errors are generic (`src/index.ts:146`) |
 | 14.3.3 | No version information in headers | Pass | No `Server` or `X-Powered-By` set by the Worker |
 | 14.4.1 | Every response has a safe `Content-Type` and charset | Pass | `c.json`, `c.html`, `c.text` set them; relayed responses keep the panel's `content-type` (`src/panel-relay.ts:78`) |
 | 14.4.2 | API responses carry `Content-Disposition: attachment` | Fail (Low, accepted) | Not set. `X-Content-Type-Options: nosniff` and `application/json` make a JSON body inert in a browser. Not worth the header |
-| 14.4.3 | A CSP as defense in depth | Pass on the account origin; Fail (Low) on relayed pages | `default-src 'none'` on every page the Worker writes (`src/headers.ts:29`). Relayed pages carry none on the account origin (`:55`), and only `frame-ancestors`, `base-uri`, `form-action`, `object-src` on the panel host (`src/panel-host.ts:259`). Root cause is F-02 |
+| 14.4.3 | A CSP as defense in depth | Pass on the account origin; Partly (Low) on relayed pages | Every page the Worker writes carries the hash CSP (`pagePolicy`). Relayed pages now carry the panel's own nonce CSP (`content-security-policy` is in the relay's `RESPONSE_HEADERS`, PR #49), but that policy is written by whoever holds the device token, and on the account origin the Worker adds none of its own. The panel host adds `PANEL_CSP` on top. Root cause is F-02 |
 | 14.4.4 | `X-Content-Type-Options: nosniff` on all responses | Pass | `src/headers.ts:46`, also on the panel host (`src/panel-host.ts:266`); `test/security.test.ts` "security headers" |
 | 14.4.5 | HSTS on all responses | Pass | `max-age=31536000; includeSubDomains` (`src/headers.ts:37`) |
 | 14.4.6 | A `Referrer-Policy` | Pass | `same-origin`, and `no-referrer` on ticket redirects (`src/headers.ts:52`, `src/panel-host.ts:196`) |
@@ -254,7 +255,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S3.3 | The refresh token never leaves the service | Pass | `/drive/token` returns an access token that lasts an hour (`src/drive.ts:123-160`) |
 | S3.4 | Disconnect and account deletion revoke at Google | Pass | `revokeGrantAtGoogle` (`src/drive.ts:190`), best effort by design |
 | S3.5 | A key rotation exists and is tested | Pass | [drive-key-rotation.md](drive-key-rotation.md); `test/security.test.ts`, `test/threat-model-claims.test.ts` |
-| S3.6 | A leaked key plus database can be answered in bulk | **Fail (Medium, F-08)** | No operator revoke exists; the runbook now says so and lists the options |
+| S3.6 | A leaked key plus database can be answered in bulk | Pass | `scripts/bulk-revoke.mjs` and [bulk-revoke.md](bulk-revoke.md) (PR #54): dry run by default, `--execute`, idempotent, resumable, bumps `session_version`; `test/bulk-revoke.test.ts`. F-08 |
 | S3.7 | The consent flow is tied to the account that began it | Fail (Low, F-11) | The flow cookie holds no account id (`src/drive.ts:42`) |
 | S3.8 | A refresh-token grant isolates accounts | Pass | `test/isolation.test.ts` "a Drive grant" |
 
@@ -265,7 +266,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S4.1 | Model, URL, prompt, schema fixed; caller supplies data only | Pass | `src/proxy.ts:82-91`, `src/assistant.ts:69-108`, `:478-508` |
 | S4.2 | Provider keys cannot appear in a response or log | Pass | See threat model T3; `src/log.ts` |
 | S4.3 | Spend reserved atomically, per account and in total | Pass | `src/db.ts:518`; `test/spend-limits.test.ts` (PR #43) |
-| S4.4 | Audio seconds charged from something the caller cannot lie about | **Fail (High, F-01)** | See 11.1.3 |
+| S4.4 | Audio seconds charged from something the caller cannot lie about | Pass | See 11.1.3 (F-01 fixed by PR #51, F-21 by PR #62) |
 | S4.5 | Summary and assistant spend settled to the provider's own usage | Pass | `src/proxy.ts:549-553`, `src/assistant.ts` `costOf` |
 | S4.6 | Only Stripe can write an allowance | Pass | Signature over the raw body, replay-proof event ids (`src/stripe.ts:71-118`, `src/db.ts:729`) |
 | S4.7 | A refund cannot exceed what was earned | Fail (Medium, F-06) | Time-prorated, blind to use (`src/stripe.ts:441-473`) |
@@ -292,8 +293,9 @@ F-02 do.**
 
 ## What would turn this into a clean pass
 
-1. F-01: floor the charge by bytes today, settle to the provider's duration next.
+1. ~~F-01: floor the charge by bytes today, settle to the provider's duration next.~~
+   Done (PR #51; F-21 closed by PR #62).
 2. F-02: set `PANEL_ORIGIN` on a second registrable domain (or accept in writing).
-3. F-03, F-07, F-08 as triaged.
+3. F-03 (plain logout) and F-07 as triaged. F-08 is done (PR #54).
 4. The three Unverified rows: someone with the Cloudflare dashboard looks at
    "Always Use HTTPS" and the minimum TLS version, and the owners read PR #45.
