@@ -376,6 +376,13 @@ records every webhook event id so a retried delivery is handled once, and
 a card number or anything else about a payment method; Stripe holds all of
 that.
 
+`trial_cards` holds, while `TRIAL_CARD_CHECK` is on (it is off in
+production today), one row per card that started a trial: a keyed hash of
+the card's Stripe fingerprint under `TRIAL_SECRET` and the account it
+started on, so the same card cannot start a second trial on another account.
+Never the fingerprint or anything else about the card. It goes with the
+account.
+
 `trial_used` holds one row per deleted account whose Google identity must not
 get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
 from `TRIAL_SECRET` (or `SESSION_SECRET` while that is unset), and a

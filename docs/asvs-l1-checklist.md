@@ -270,7 +270,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S4.5 | Summary and assistant spend settled to the provider's own usage | Pass | `src/proxy.ts:549-553`, `src/assistant.ts` `costOf` |
 | S4.6 | Only Stripe can write an allowance | Pass | Signature over the raw body, replay-proof event ids (`src/stripe.ts:71-118`, `src/db.ts:729`) |
 | S4.7 | A refund cannot exceed what was earned | Fail (Medium, F-06) | Time-prorated, blind to use (`src/stripe.ts:441-473`) |
-| S4.8 | Trials cannot be repeated cheaply | Fail (Low, F-10, F-12) | One trial per Google identity; not per card; block is keyed from `SESSION_SECRET` |
+| S4.8 | One trial per person | Partly (Low) | One trial per Google identity, kept across deletion (`trial_used`). One per card is built and off: `TRIAL_CARD_CHECK` ends a trial whose card already started another account's (`test/trial-card.test.ts`), waiting on a privacy line. The trial key has its own secret, `TRIAL_SECRET` (F-12) |
 
 ### Repository and deployment
 

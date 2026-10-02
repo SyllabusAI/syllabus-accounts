@@ -40,6 +40,9 @@ npx wrangler rollback <version-id> -m "why"
   the bad PR on `main` (through a PR) in the same hour, or the fix is undone
   by the next unrelated merge.
 - Takes effect in seconds. Nobody is signed out.
+- Drilled 2026-10-02 by rolling back to the version already live (a no-op):
+  `npx wrangler rollback <current version id> -m "drill" -y` deployed it to
+  100% with no prompt, and `/healthz` answered throughout.
 
 ## Restore the database
 
