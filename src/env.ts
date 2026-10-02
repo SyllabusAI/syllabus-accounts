@@ -34,6 +34,19 @@ export type Bindings = {
   GOOGLE_CLIENT_SECRET: string;
   /** Secret: signs the browser session cookie. `wrangler secret put SESSION_SECRET`. */
   SESSION_SECRET: string;
+  /**
+   * Secret, OPTIONAL: the key the repeat-trial block hashes a deleted
+   * account's Google `sub` under (trialHash in crypto.ts). Unset falls back to
+   * SESSION_SECRET, which is how every trial_used row so far was written.
+   *
+   * Its own secret so that rotating SESSION_SECRET after a leak, which is the
+   * documented response, does not quietly give every deleted identity a new
+   * trial (F-12). Set it once to the CURRENT value of SESSION_SECRET, from
+   * wherever that is kept: `wrangler secret put TRIAL_SECRET`. A different
+   * value would orphan the existing rows, and they cannot be re-keyed, since
+   * the sub they came from is not stored. After that, never rotate it.
+   */
+  TRIAL_SECRET?: string;
   /** Secret: encrypts stored Drive refresh tokens. `wrangler secret put DRIVE_KEY`. */
   DRIVE_KEY: string;
   /**

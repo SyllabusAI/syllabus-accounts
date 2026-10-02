@@ -378,9 +378,11 @@ that.
 
 `trial_used` holds one row per deleted account whose Google identity must not
 get a second free trial: HMAC-SHA256 of the Google `sub` under a key derived
-from `SESSION_SECRET`, and a timestamp. Nothing else. Rotating `SESSION_SECRET`
-forgets it, which gives those people a trial again rather than locking anybody
-out.
+from `TRIAL_SECRET` (or `SESSION_SECRET` while that is unset), and a
+timestamp. Nothing else. With `TRIAL_SECRET` set to the current
+`SESSION_SECRET` value, a later rotation of `SESSION_SECRET` leaves the block
+in place; without it, a rotation forgets every row, which gives those people a
+trial again rather than locking anybody out.
 
 The Worker's logs are not the database, and they hold less. Cloudflare keeps
 them (Workers Logs, `wrangler tail`, any Logpush job) and anyone with
