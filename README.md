@@ -359,6 +359,12 @@ what it may spend, as numbers). No recording, transcript, or API key ever
 comes here: audio and transcripts stream through the proxy to the provider
 and only the unit count is kept.
 
+`measured_chunks` holds, for a day, the length a provider measured for a
+chunk an account sent, keyed by a SHA-256 of the chunk's bytes. It is what a
+`quality=high` second pass on the same chunk is billed on (threat-model-0.6.md,
+F-21). The hash names audio the account already sent; it is not the audio and
+cannot be turned back into it. The hourly cron drops rows older than a day.
+
 `subscriptions` mirrors what Stripe says an account pays for, `stripe_events`
 records every webhook event id so a retried delivery is handled once, and
 `stripe_customers` is which account a Stripe customer is. None of them carries

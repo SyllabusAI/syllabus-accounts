@@ -57,10 +57,10 @@ export type Bindings = {
    * Var, OPTIONAL: "on" accepts `quality=high` on /proxy/transcribe. Unset
    * (the default, and production's) refuses it before anything is charged.
    *
-   * Keep it off until the second pass is billed on a length the caller
-   * cannot write (threat-model-0.6.md, F-21). gpt-4o-transcribe's answer
-   * carries no duration, so today a high pass is billed on the caller's own
-   * header and a byte floor that low-bitrate audio gets under.
+   * Since migration 0018 a high pass is billed on the length the provider
+   * measured on the standard pass of the same bytes, and refused without one
+   * (threat-model-0.6.md, F-21), so it is safe to turn on. It stays off until
+   * the Mac that sends it (LectureAI #104) ships.
    */
   HIGH_QUALITY_PASS?: string;
   /** Secret: the summary key the proxy spends. `wrangler secret put ANTHROPIC_API_KEY`. */

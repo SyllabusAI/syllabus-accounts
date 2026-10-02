@@ -99,6 +99,11 @@ const OPENAI_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
  * hour against Groq's $0.111, so 3x keeps a second pass from costing this
  * service more than it takes off the allowance. The first pass was billed on
  * its own request; this is billed on top of it, because it is a second call.
+ *
+ * The length it is billed on is the first pass's, as the provider measured
+ * it (measured_chunks, F-21): a high pass on bytes this account never sent
+ * through a measured standard pass in the last day is refused with
+ * `first_pass_required`, and the Mac keeps its first transcript.
  */
 const HIGH_QUALITY_MODEL = "gpt-4o-transcribe";
 export const HIGH_QUALITY_RATE = 3;
@@ -176,6 +181,12 @@ const UNREADABLE_AUDIO_BYTES_PER_SECOND = 4_000;
  * after transcription whenever that is larger (see settle below).
  */
 export const AUDIO_FLOOR_BYTES_PER_SECOND = 24_000;
+
+/** SHA-256 of a chunk's bytes, as hex: how a second pass finds its first. */
+async function bytesHash(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Seconds the meter charges up front: the largest of what the header, the caller, and the byte count each say. */
 export function chargedSeconds(measured: number | null, declared: number, byteLength: number): number {
@@ -551,7 +562,7 @@ proxy.post("/proxy/transcribe", async (c) => {
   }
   const quality: Quality = rawQuality === "high" ? "high" : "standard";
   // Refused before the audio is read or anything is held: see
-  // HIGH_QUALITY_PASS in env.ts for why it is off.
+  // HIGH_QUALITY_PASS in env.ts.
   if (quality === "high" && c.env.HIGH_QUALITY_PASS !== "on") {
     return c.json({ error: "quality_unavailable", detail: "the high-quality pass is not offered yet" }, 400);
   }
@@ -559,7 +570,21 @@ proxy.post("/proxy/transcribe", async (c) => {
   // Read once: the same bytes are measured and then forwarded.
   const bytes = new Uint8Array(await audio.arrayBuffer());
   const measured = mp4DurationSeconds(bytes);
-  const seconds = chargedSeconds(measured, declared, bytes.byteLength);
+  let seconds = chargedSeconds(measured, declared, bytes.byteLength);
+  // The provider's measurement of these exact bytes, which is what a second
+  // pass is billed on (F-21): gpt-4o-transcribe reports no duration of its
+  // own, so without one the header and the byte floor would be the bill.
+  const chunkHash = await bytesHash(bytes);
+  if (quality === "high") {
+    const firstPass = await db.measuredChunk(c.env.DB, account.id, chunkHash);
+    if (firstPass === null) {
+      return c.json(
+        { error: "first_pass_required", detail: "a second pass needs a standard pass of the same audio first" },
+        409,
+      );
+    }
+    seconds = Math.max(seconds, firstPass);
+  }
   if (seconds > MAX_CHUNK_SECONDS) {
     return c.json({ error: "too_long", limit_seconds: MAX_CHUNK_SECONDS, audio_seconds: seconds }, 413);
   }
@@ -606,6 +631,11 @@ proxy.post("/proxy/transcribe", async (c) => {
   if (attempt.duration !== null && Math.ceil(attempt.duration) > seconds) {
     billed = Math.ceil(attempt.duration);
     log(`proxy: provider measured ${billed}s of audio against ${seconds}s reserved`);
+  }
+  // Only a length the provider measured is kept for a second pass; the
+  // OpenAI legs report none, and a chunk they handled gets no second pass.
+  if (quality === "standard" && attempt.duration !== null) {
+    await db.recordMeasuredChunk(c.env.DB, account.id, chunkHash, attempt.duration);
   }
   // It still has to happen even when nothing changes: a reservation nobody
   // settles is swept back to the account in the end.
