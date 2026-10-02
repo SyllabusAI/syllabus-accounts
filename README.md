@@ -224,6 +224,9 @@ hourly cron in `wrangler.jsonc` is what finishes a rotation.
 What the service protects, from whom, and how each route is authenticated:
 [docs/threat-model.md](docs/threat-model.md).
 
+When production is wrong (a bad deploy, lost data, the monthly cap):
+[docs/runbook.md](docs/runbook.md).
+
 The Worker's route is a custom domain, so `wrangler deploy` also creates the
 DNS record. The Google side is a **Web application** OAuth client in Google
 Cloud project **friendly-bazaar-507320-b7**, the same project as the Desktop
