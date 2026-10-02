@@ -74,6 +74,21 @@ describe("connecting Drive to the account", () => {
     expect((await get("/drive/connect")).headers.get("Location")).toContain("/login?next=");
   });
 
+  it("attaches the grant only to the account that started the flow (F-11)", async () => {
+    const { account: starter, flowCookie, nonce, state } = await connect("starter@example.com");
+    const calls = google(() => ({ status: 200, body: grantBody(nonce) }));
+    // The browser's session changed while Google was asking.
+    const other = await signedInAs("switched@example.com");
+
+    const cb = await get(`/oauth2/callback?state=${state}&code=drive-code`, { Cookie: `${other.cookie}; ${flowCookie}` });
+    expect(cb.status).toBe(409);
+    expect(await cb.text()).toContain("different Syllabus account");
+    expect(calls).toHaveLength(0);
+    for (const id of [starter.id, other.account.id]) {
+      expect(await env.DB.prepare("SELECT 1 FROM drive_grants WHERE account_id = ?").bind(id).first()).toBeNull();
+    }
+  });
+
   it("stores the refresh token encrypted and shows the connection", async () => {
     const { account, cookie, flowCookie, nonce, state } = await connect("b@example.com");
     const calls = google((_u, sent) => ({ status: 200, body: grantBody(nonce) }));

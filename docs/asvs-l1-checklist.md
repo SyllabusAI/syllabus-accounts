@@ -23,8 +23,8 @@ Findings carry the IDs from [threat-model-0.6.md](threat-model-0.6.md).
 |---|---|
 | Fail, **High** (blocking) | S2.8 (F-02) |
 | Fail or Partly, Medium | 3.3.1 (F-03, plain logout); S1.9 (F-04); S4.7 (F-06); S5.2, S5.3 (F-07) |
-| Fail or Partly, Low | 14.4.2 (accepted), 14.4.3 (relayed pages), S3.7 (F-11), S4.8 (F-10, F-12) |
-| Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08); 2.7.2 (F-17); 8.2.1 (F-20) |
+| Fail or Partly, Low | 14.4.2 (accepted), 14.4.3 (relayed pages), S4.8 (F-10, F-12) |
+| Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08); 2.7.2 (F-17); 8.2.1 (F-20); S3.7 (F-11) |
 | Unverified | 8.3.3, 9.1.2, 9.1.3 (and the "Always Use HTTPS" note under 9.1.1) |
 | Everything else | Pass or N/A, each with its reason |
 
@@ -256,7 +256,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S3.4 | Disconnect and account deletion revoke at Google | Pass | `revokeGrantAtGoogle` (`src/drive.ts:190`), best effort by design |
 | S3.5 | A key rotation exists and is tested | Pass | [drive-key-rotation.md](drive-key-rotation.md); `test/security.test.ts`, `test/threat-model-claims.test.ts` |
 | S3.6 | A leaked key plus database can be answered in bulk | Pass | `scripts/bulk-revoke.mjs` and [bulk-revoke.md](bulk-revoke.md) (PR #54): dry run by default, `--execute`, idempotent, resumable, bumps `session_version`; `test/bulk-revoke.test.ts`. F-08 |
-| S3.7 | The consent flow is tied to the account that began it | Fail (Low, F-11) | The flow cookie holds no account id (`src/drive.ts:42`) |
+| S3.7 | The Drive consent is bound to the account that started it | Pass | Fixed 2026-10-02: the flow cookie carries the account id and `finishConnect` refuses a callback for any other account before calling Google (`test/drive.test.ts` "attaches the grant only to the account that started the flow"). The flow cookie is also `__Host-` and a planted duplicate is refused. F-11 |
 | S3.8 | A refresh-token grant isolates accounts | Pass | `test/isolation.test.ts` "a Drive grant" |
 
 ### The proxy and billing
