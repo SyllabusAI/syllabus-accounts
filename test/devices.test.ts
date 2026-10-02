@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIMITS, type Limit } from "../src/limits";
+import { askedAgo } from "../src/pages";
 import { claimDevice, freezeClockJustBeforeAWindowEnds, get, ORIGIN, postForm, postJson, signedInAs } from "./helpers";
 
 describe("claiming a panel", () => {
@@ -35,6 +36,19 @@ describe("claiming a panel", () => {
     const html = await (await get("/device?code=" + started.user_code, { Cookie: cookie })).text();
     expect(html).toContain("Kitchen iMac");
     expect(html).toContain("me@example.com");
+    // F-04: a phished link looks just like the Mac's own, so the page says
+    // when the request started and what approving gives away, every time.
+    expect(html).toContain("It asked just now.");
+    expect(html).toContain("If someone sent you this link or this code, close this page");
+  });
+
+  it("says how long a Mac has been asking", () => {
+    const at = "2026-10-02T12:00:00.000Z";
+    const t = Date.parse(at);
+    expect(askedAgo(at, t + 30_000)).toBe("just now");
+    expect(askedAgo(at, t + 60_000)).toBe("1 minute ago");
+    expect(askedAgo(at, t + 7 * 60_000 + 5_000)).toBe("7 minutes ago");
+    expect(askedAgo("not a date", t)).toBe("just now");
   });
 
   it("approves, then the poll returns a token that works as a bearer", async () => {
