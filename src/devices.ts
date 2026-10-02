@@ -141,11 +141,15 @@ devices.get("/device", async (c) => {
     }
   }
   let deviceName = "";
+  let askedAt = "";
   if (code) {
     const pending = await db.deviceCodeByUserCode(c.env.DB, code);
-    if (pending && pending.expires_at > new Date().toISOString() && !pending.approved_account_id) deviceName = pending.device_name;
+    if (pending && pending.expires_at > new Date().toISOString() && !pending.approved_account_id) {
+      deviceName = pending.device_name;
+      askedAt = pending.created_at;
+    }
   }
-  return c.html(devicePage(account, code, deviceName, ""));
+  return c.html(devicePage(account, code, deviceName, "", askedAt));
 });
 
 devices.post("/device/approve", async (c) => {

@@ -229,7 +229,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S1.6 | Device code (`device_code`) unguessable and hashed | Pass | 256 bits (`randomId(32)`), stored as SHA-256 (`src/devices.ts:106`, `:113`) |
 | S1.7 | User code hard to guess in the window | Pass | 32^8, about 10^12, 10 minutes, 500 pending, 30 approvals per 10 minutes per account and 300 per address |
 | S1.8 | Only a browser session can approve a code | Pass | `browserOnly` and `sameOrigin` (`src/devices.ts:150-154`) |
-| S1.9 | The approver can tell whose Mac they are enrolling | **Fail (Medium)** | The page shows a Mac name the requester chose (80 characters, `src/devices.ts:83`) and nothing else; `verification_uri_complete` prefills the code (`:119`). One click enrolls an attacker's Mac into the victim's account. F-04 |
+| S1.9 | The approver can tell whose Mac they are enrolling | Partly (Medium) | Re-checked 2026-10-02: the page shows the requester-chosen name, how long ago the request started, and a warning that a link or code someone else sent must not be approved (`devicePage`; `test/devices.test.ts` "shows the Mac's name to the person approving it"). It still cannot show where the request came from; that needs the requesting country kept with the code. F-04 |
 | S1.10 | Token stored safely on the Mac | Pass (Low note) | 0600 file in a 0700 directory, atomic write (LectureAI `intake/config.py` `write_private`). A Keychain item would be stronger |
 
 ### The relay Durable Object

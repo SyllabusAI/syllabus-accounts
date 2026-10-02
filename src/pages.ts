@@ -732,11 +732,26 @@ export function codeForm(code: string, error: string): string {
     </form>`;
 }
 
-export function devicePage(account: Account, code: string, deviceName: string, error: string): string {
+/** "just now", "1 minute ago", "7 minutes ago": how long a pending Mac has been asking. */
+export function askedAgo(createdAt: string, nowMs = Date.now()): string {
+  const minutes = Math.floor((nowMs - Date.parse(createdAt)) / 60_000);
+  if (!Number.isFinite(minutes) || minutes < 1) return "just now";
+  return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
+}
+
+/**
+ * The approval page. A link with the code filled in is how the Mac opens it,
+ * and also how a phisher would send it (F-04): the name is whatever the
+ * requesting Mac chose. So the page says when the request started and, every
+ * time, what approving gives away, and the person decides with both in view.
+ */
+export function devicePage(account: Account, code: string, deviceName: string, error: string, askedAt = ""): string {
+  const when = askedAt ? ` It asked ${askedAgo(askedAt)}.` : "";
   const intro = deviceName
-    ? `<p>A Mac called <strong>${h(deviceName)}</strong> is asking to join <strong>${h(account.email)}</strong>.</p>`
+    ? `<p>A Mac called <strong>${h(deviceName)}</strong> is asking to join <strong>${h(account.email)}</strong>.${when}</p>`
     : `<p>Enter the code Syllabus is showing to connect that Mac to <strong>${h(account.email)}</strong>.</p>`;
-  return page("Connect a Mac", intro + codeForm(code, error) + `<p class="muted"><a href="/">Your account</a></p>`);
+  const warning = `<p class="warn">Only continue if you started signing in to Syllabus on your own Mac in the last few minutes. If someone sent you this link or this code, close this page: connecting their Mac would let it record into your account and file notes in your Google Drive.</p>`;
+  return page("Connect a Mac", intro + warning + codeForm(code, error) + `<p class="muted"><a href="/">Your account</a></p>`);
 }
 
 export function approvedPage(account: Account, deviceName: string): string {
