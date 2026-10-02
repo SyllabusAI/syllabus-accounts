@@ -1,6 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encrypt, trialHash } from "../src/crypto";
+import { encrypt, trialHash, trialSecret } from "../src/crypto";
 import { toBase64Url } from "../src/util";
 import * as db from "../src/db";
 import type { WelcomeFrame } from "../src/panel-relay";
@@ -676,6 +676,29 @@ describe("the free trial after a deletion", () => {
     expect(await trialHash("another-secret", sub)).not.toBe(row!.sub_hash);
     const raw = await env.DB.prepare("SELECT COUNT(*) AS n FROM trial_used WHERE sub_hash = ?").bind(sub).first<{ n: number }>();
     expect(raw!.n).toBe(0);
+  });
+
+  it("survives a SESSION_SECRET rotation once TRIAL_SECRET holds the old value (F-12)", async () => {
+    const keys = env as { SESSION_SECRET: string; TRIAL_SECRET?: string };
+    const original = keys.SESSION_SECRET;
+    const email = "rotation@example.com";
+    try {
+      // The one-time step: TRIAL_SECRET set to what SESSION_SECRET is now.
+      keys.TRIAL_SECRET = original;
+      const first = await signedInAs(email);
+      expect((await confirm(first.cookie, email)).status).toBe(200);
+      // A row written before TRIAL_SECRET existed is under the same key, so it still matches.
+      expect(await trialHash(trialSecret(keys), "sub-" + email)).toBe(await trialHash(original, "sub-" + email));
+
+      // A leak is answered by rotating SESSION_SECRET. The trial block holds.
+      keys.SESSION_SECRET = "a-new-session-secret-after-a-leak";
+      const cookie = await googleSignIn("sub-" + email, email);
+      const id = (await sessionAccount(cookie))!;
+      expect((await db.allowance(env.DB, id))?.source).toBe("trial_used");
+    } finally {
+      keys.SESSION_SECRET = original;
+      delete keys.TRIAL_SECRET;
+    }
   });
 
   it("gives the new account no trial: the proxy refuses and nothing is recordable", async () => {

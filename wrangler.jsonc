@@ -7,6 +7,10 @@
 //   OPENAI_API_KEY         the transcription key /proxy falls back to
 //   ANTHROPIC_API_KEY      the summary key /proxy spends on a user's behalf
 // Optional:
+//   TRIAL_SECRET           what the repeat-trial block hashes under. Unset
+//                          falls back to SESSION_SECRET. Set it once to the
+//                          current SESSION_SECRET value, then never rotate it
+//                          (src/env.ts says why).
 //   GROQ_API_KEY           the cheaper transcription key /proxy prefers. Unset
 //                          means every transcription goes to OpenAI.
 //   STRIPE_WEBHOOK_SECRET  what Stripe signs webhook deliveries with. Unset
@@ -15,7 +19,7 @@
 //                          spend it, and it is what account deletion falls
 //                          back to if STRIPE_ACCOUNT_DELETION_KEY is unset.
 //   STRIPE_ACCOUNT_DELETION_KEY  a Stripe key restricted to Subscriptions,
-//                          Refunds and Customers (write). Account deletion and
+//                          Refunds and Customers (write) and Invoices (read). Account deletion and
 //                          the webhook's orphan cleanup spend this instead of
 //                          STRIPE_SECRET_KEY, so a leak of the key Checkout
 //                          uses every request cannot cancel a subscription,

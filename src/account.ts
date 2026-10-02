@@ -42,7 +42,7 @@
 
 import { Hono, type Context } from "hono";
 import { leaveStripe, type StripeExit } from "./billing";
-import { trialHash } from "./crypto";
+import { trialHash, trialSecret } from "./crypto";
 import * as db from "./db";
 import { revokeGrantAtGoogle } from "./drive";
 import type { Account, AppEnv, Bindings } from "./env";
@@ -60,8 +60,8 @@ import { TRIAL_USED_ALLOWANCE } from "./tiers";
  * only when the identity is in trial_used and the account has no allowance
  * row yet, so a paid plan is never touched. See migrations/0013.
  */
-export async function applyTrialBlock(env: Pick<Bindings, "DB" | "SESSION_SECRET">, accountId: string, sub: string): Promise<void> {
-  if (!(await db.trialWasUsed(env.DB, await trialHash(env.SESSION_SECRET, sub)))) return;
+export async function applyTrialBlock(env: Pick<Bindings, "DB" | "SESSION_SECRET" | "TRIAL_SECRET">, accountId: string, sub: string): Promise<void> {
+  if (!(await db.trialWasUsed(env.DB, await trialHash(trialSecret(env), sub)))) return;
   await db.blockTrial(env.DB, accountId, TRIAL_USED_ALLOWANCE);
 }
 
@@ -154,7 +154,7 @@ account.post("/account/delete", async (c) => {
 
   // 2. Every row, in one transaction.
   try {
-    await db.deleteAccountData(c.env.DB, who.id, await trialHash(c.env.SESSION_SECRET, who.google_sub));
+    await db.deleteAccountData(c.env.DB, who.id, await trialHash(trialSecret(c.env), who.google_sub));
   } catch (err) {
     log(`account ${who.id}: deleting the rows failed: ${(err as Error).message}`);
     return c.html(

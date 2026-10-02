@@ -139,7 +139,9 @@ grants nothing.
 **7. Leaked secrets.**
 Secrets live only in Worker secrets and `.dev.vars` (gitignored). Upstream
 error bodies are never forwarded or logged. A leaked `SESSION_SECRET` is fixed
-by rotating it, which signs everyone out. A leaked `DRIVE_KEY` alone is
+by rotating it, which signs everyone out. Set `TRIAL_SECRET` first if it is
+not set yet (to the old value), or the rotation also reopens every deleted
+account's free trial. A leaked `DRIVE_KEY` alone is
 useless without the database; see [drive-key-rotation.md](drive-key-rotation.md)
 for rotating it, and for what to do when both leak.
 
