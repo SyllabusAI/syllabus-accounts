@@ -14,8 +14,14 @@
  * forecast built on them.
  */
 
-/** $/audio hour, from each provider's published pricing. */
-const RATES = { groq: 0.111, openai: 0.18 };
+/**
+ * $ per hour of usage as the table stores it, from each provider's published
+ * pricing. For groq and openai that is an audio hour. An `openai-high` row
+ * stores what came off the allowance, three times the audio
+ * (HIGH_QUALITY_RATE in src/proxy.ts), so gpt-4o-transcribe's $0.36 an audio
+ * hour is $0.12 per stored hour.
+ */
+const RATES = { groq: 0.111, openai: 0.18, "openai-high": 0.12 };
 
 const SQL = `SELECT period, provider, COUNT(*) AS calls, SUM(units) AS seconds
                FROM usage

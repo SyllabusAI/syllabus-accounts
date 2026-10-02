@@ -19,6 +19,13 @@ describe("the transcription split, as a person reads it", () => {
     expect(out).toContain("10%");
   });
 
+  it("prices a second pass by what it stores, three times the audio", () => {
+    // 3 stored hours of openai-high are 1 audio hour on gpt-4o-transcribe: $0.36.
+    const out = render([{ period: "2026-10", provider: "openai-high", calls: 4, seconds: 3 * HOUR }]);
+    expect(out).toContain("$0.36");
+    expect(out).not.toContain("unknown");
+  });
+
   it("refuses to price rows from before the provider was recorded", () => {
     const out = render([
       { period: "2026-09", provider: "", calls: 50, seconds: 5 * HOUR },
