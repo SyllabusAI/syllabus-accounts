@@ -194,7 +194,7 @@ runbook says 32 random bytes).
 
 | ID | Requirement | Result | Evidence |
 |---|---|---|---|
-| 14.2.1 | Components current and free of known vulnerabilities | Pass | `npm audit --omit=dev`: 0 vulnerabilities (2026-10-02). `npm audit` including dev tooling: 3 moderate and 1 high, all in `undici` inside `miniflare`/`wrangler`/`vitest-pool-workers`, used by the local test runner and not part of the deployed bundle. Dependabot alerts are off (F-07) |
+| 14.2.1 | Components current and free of known vulnerabilities | Pass | `npm audit --omit=dev`: 0 vulnerabilities (2026-10-02). `npm audit` including dev tooling: 3 moderate and 1 high, all in `undici` inside `miniflare`/`wrangler`/`vitest-pool-workers`, used by the local test runner and not part of the deployed bundle. Dependabot alerts on since 2026-10-03 (F-07) |
 | 14.2.2 | Unneeded features and sample content removed | Pass | Nothing beyond the routes in the route table |
 | 14.2.3 | Assets from a CDN carry integrity checks | N/A | No external assets |
 | 14.3.2 | Debug modes off | Pass | No debug routes; errors are generic (`src/index.ts:146`) |
@@ -277,8 +277,8 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | ID | Check | Result | Evidence |
 |---|---|---|---|
 | S5.1 | Nothing merges without CI | Pass | Branch protection requires `check` and `prompt-parity`, with admins enforced (GitHub API, read only) |
-| S5.2 | Deploy only from reviewed `main` | **Fail (Medium, F-07)** | The `production` environment has no protection rules and no branch policy; `workflow_dispatch` is enabled (`.github/workflows/deploy.yml`); pull requests do not require a review |
-| S5.3 | Secret scanning and push protection on a public repo | Fail (Medium, F-07) | Both off (GitHub API, read only) |
+| S5.2 | Deploy only from reviewed `main` | Partly (Medium, F-07) | Since 2026-10-03 `production` deploys only from `main` and needs Trace or Liam to approve each deploy, which also covers `workflow_dispatch`. Pull requests still do not require a review |
+| S5.3 | Secret scanning and push protection on a public repo | Pass | Both on since 2026-10-03, with Dependabot alerts, here and in LectureAI |
 | S5.4 | No secrets in the repo | Pass | `.dev.vars` is gitignored; `.dev.vars.example` holds names only |
 
 ## Triage of every Medium
