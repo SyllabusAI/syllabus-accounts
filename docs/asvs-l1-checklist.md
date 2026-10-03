@@ -277,7 +277,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | ID | Check | Result | Evidence |
 |---|---|---|---|
 | S5.1 | Nothing merges without CI | Pass | Branch protection requires `check` and `prompt-parity`, with admins enforced (GitHub API, read only) |
-| S5.2 | Deploy only from reviewed `main` | Partly (Medium, F-07) | Since 2026-10-03 `production` deploys only from `main` and needs Trace or Liam to approve each deploy, which also covers `workflow_dispatch`. Pull requests still do not require a review |
+| S5.2 | Deploy only from reviewed `main` | Accepted (F-07) | Since 2026-10-03 `production` deploys only from `main` and needs Trace or Liam to approve each deploy, which also covers `workflow_dispatch`. Pull requests do not require a review: accepted 2026-10-03, the two owners merge their own PRs and the deploy approval is the second look |
 | S5.3 | Secret scanning and push protection on a public repo | Pass | Both on since 2026-10-03, with Dependabot alerts, here and in LectureAI |
 | S5.4 | No secrets in the repo | Pass | `.dev.vars` is gitignored; `.dev.vars.example` holds names only |
 
