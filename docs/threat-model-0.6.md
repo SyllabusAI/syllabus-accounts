@@ -598,7 +598,7 @@ That is by design (the panel is a remote UI) and is F-05 (Medium).
 taking it back; a forger of Stripe events; anyone with free accounts.
 
 **Entry points.** `POST /stripe/webhook` (`src/stripe.ts:71`),
-`POST /billing/checkout|portal` (`src/billing.ts:74`, `:150`),
+`POST /billing/checkout|portal|upgrade` (`src/billing.ts`),
 `POST /account/delete` (refund path), the trial.
 
 **Mitigations that exist (verified).**

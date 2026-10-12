@@ -3,14 +3,16 @@
  *
  *   POST /billing/checkout   (session) start a Stripe Checkout for a tier
  *   POST /billing/portal     (session) open Stripe's Billing Portal
+ *   POST /billing/upgrade    (session) move an active plan to a bigger one
  *
- * Both are browser routes: a panel holds a device token that lives on a
+ * All three are browser routes: a panel holds a device token that lives on a
  * laptop for months, and buying or canceling a subscription is not something
- * it does on its owner's behalf. Both hand off to a Stripe-hosted page, so
- * no card number, no billing address and no tax id is ever typed into
+ * it does on its owner's behalf. Checkout and the portal hand off to a
+ * Stripe-hosted page, and an upgrade charges the card Stripe already holds,
+ * so no card number, no billing address and no tax id is ever typed into
  * anything this service serves.
  *
- * Neither route grants anything. What somebody may spend is written by the
+ * None of them grants anything. What somebody may spend is written by the
  * webhook (stripe.ts) when Stripe says the money moved, and enforced by the
  * proxy. A Checkout that completes and a webhook that never arrives leaves
  * the account exactly where it was, which is the right way around.
@@ -20,10 +22,10 @@ import { Hono, type Context } from "hono";
 import * as db from "./db";
 import type { AppEnv, Bindings } from "./env";
 import { LIMITS, limitedPage, overLimit } from "./limits";
-import { page } from "./pages";
+import { page, upgradeConfirmPage } from "./pages";
 import { browserOnly, sameOrigin } from "./session";
-import { deleteCustomer, deletionStripeClient, endSubscription, isLive, missing, stripeClient } from "./stripe";
-import { entitlingSubscription, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
+import { deleteCustomer, deletionStripeClient, endSubscription, isLive, missing, periodStart, stripeClient } from "./stripe";
+import { entitlingSubscription, isUpgrade, tierForPrice, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { log } from "./log";
 
 export const billing = new Hono<AppEnv>();
@@ -153,6 +155,95 @@ billing.post("/billing/portal", async (c) => {
     // the Stripe dashboard, which is a settings page rather than a bug here.
     log(`billing: the portal would not open, ${(err as Error).message}`);
     return c.html(problem("Stripe could not open the billing page. Nothing has changed."));
+  }
+});
+
+/**
+ * Moving an active plan to a bigger one, from the account page.
+ *
+ * Not through the Billing Portal, whose plan switching is turned off. The
+ * three plans are separate Stripe products, and the portal can only hold a
+ * downgrade until the period ends when both prices share a product, so a
+ * portal downgrade happens at once and credits the difference back after the
+ * bigger plan's hours have been used. This route only goes up, and moving
+ * down is a cancellation followed by a new plan when the paid month ends.
+ *
+ * An upgrade costs the whole difference between the two monthly prices,
+ * charged now. Hours are counted by the calendar month (usagePeriod in
+ * db.ts) and the bigger plan's hours arrive in full as soon as Stripe says
+ * so, so a charge prorated by time would sell 30 more hours on the last day
+ * of a billing period for pennies. Stripe is asked to prorate as though the
+ * change had been made at the start of the period, which comes to exactly
+ * the difference, and to refuse the change outright if the card does not pay
+ * (`error_if_incomplete`), so a declined card leaves the plan as it was.
+ *
+ * Two steps, because a button that moves money says how much first: a POST
+ * without confirm=1 shows the price, and only a confirmed one calls Stripe.
+ * Nothing here grants anything either. The webhook writes the new allowance
+ * when Stripe sends customer.subscription.updated, the same road a new plan
+ * takes.
+ */
+billing.post("/billing/upgrade", async (c) => {
+  const { refusal, account } = await ready(c);
+  if (refusal) return refusal;
+
+  const form = await c.req.formData();
+  const wanted = String(form.get("tier") ?? "");
+  if (!isTier(wanted)) return c.html(problem("That is not a plan we sell."));
+  const sub = entitlingSubscription(await db.subscriptionsOf(c.env.DB, account!.id));
+  if (!sub || sub.status !== "active" || sub.cancel_at_period_end) {
+    return c.html(problem("Only a plan that is active and renewing can be upgraded. Nothing was charged."));
+  }
+  if (!isUpgrade(sub.tier, wanted)) {
+    return c.html(problem("That plan is not bigger than the one you have. Nothing was charged."));
+  }
+  const price = priceFor(c, wanted);
+  if (!price) {
+    log(`billing: no price id is configured for ${wanted}`);
+    return c.html(problem("That plan cannot be bought yet. Nothing was charged."));
+  }
+  const from = sub.tier as TierName;
+  if (String(form.get("confirm") ?? "") !== "1") {
+    return c.html(upgradeConfirmPage(from, wanted, sub.current_period_end));
+  }
+
+  const stripe = stripeClient(c.env);
+  try {
+    // Asked again rather than read from the mirror, which can be a webhook
+    // behind: the change is made to the plan Stripe has, not the one we last
+    // heard about.
+    const live = await stripe.subscriptions.retrieve(sub.stripe_subscription_id);
+    const item = live.items?.data?.length === 1 ? live.items.data[0] : null;
+    const current = item ? tierForPrice(c.env, item.price.id) : null;
+    const start = periodStart(live);
+    if (!item || !current || !start || live.status !== "active" || live.cancel_at_period_end || !isUpgrade(current, wanted)) {
+      log(`billing: upgrade of ${live.id} to ${wanted} refused, Stripe has it ${live.status} on ${current ?? "an unknown price"}`);
+      return c.html(problem("Your plan changed while this page was open, so nothing was charged. Go back to your account and try again."));
+    }
+    await stripe.subscriptions.update(
+      live.id,
+      {
+        items: [{ id: item.id, price }],
+        proration_behavior: "always_invoice",
+        proration_date: start,
+        payment_behavior: "error_if_incomplete",
+      },
+      // One charge per subscription, period and plan: a double click or a
+      // form sent twice cannot upgrade, and charge, twice.
+      { idempotencyKey: `upgrade:${live.id}:${start}:${price}` },
+    );
+    log(`billing: ${live.id} upgraded from ${current} to ${wanted}`);
+    return c.redirect("/?billing=upgraded", 303);
+  } catch (err) {
+    log(`billing: upgrade to ${wanted} failed, ${(err as Error).message}`);
+    if ((err as { type?: string }).type === "StripeCardError") {
+      return c.html(
+        problem(
+          "Your card was declined, so your plan has not changed and nothing was charged. You can update your card under Manage billing on your account page.",
+        ),
+      );
+    }
+    return c.html(problem("Stripe could not make that change. Your plan has not changed and nothing was charged."));
   }
 });
 

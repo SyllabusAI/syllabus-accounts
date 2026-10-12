@@ -49,7 +49,7 @@ ignored. Windows are in seconds.
 | `POST /device/approve` | Session (browser only) | `deviceApprove` 30/600 per account and `deviceApproveAddress` 300/600 per source; plus session floor | devices.ts | The guess-a-code defense. |
 | `POST /devices/:id/revoke`, `/devices/revoke-all` | Session (browser only) | session floor | index.ts | |
 | `GET/POST /account/delete` | Session (browser only, recent sign-in) | POST: `accountDelete` 5/600 per account; plus session floor | account.ts | Counted after the sign-in and same-origin checks, before Stripe is called. |
-| `POST /billing/checkout`, `/portal` | Session (browser only) | `billing` 20/600 per account | billing.ts | |
+| `POST /billing/checkout`, `/portal`, `/upgrade` | Session (browser only) | `billing` 20/600 per account | billing.ts | |
 | `GET /drive/connect` | Session (browser only) | session floor | index.ts | Sets a cookie and redirects; no upstream call. |
 | `POST /drive/disconnect` | Session (browser only) | session floor | index.ts | One call to Google's revoke endpoint. |
 | `GET /drive/status` | Session or Device | signed-in floor | index.ts | |

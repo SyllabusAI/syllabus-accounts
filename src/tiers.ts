@@ -261,6 +261,18 @@ export function entitlingSubscription(subs: Subscription[], at: Date = new Date(
 }
 
 /**
+ * Whether moving from one tier to another is an upgrade: a plan that costs
+ * more. Only upgrades can be made from the account page (POST
+ * /billing/upgrade); moving down is a cancellation, then a new plan once the
+ * paid month ends. A tier this file does not know is never an upgrade.
+ */
+export function isUpgrade(from: string, to: string): boolean {
+  const a = TIERS[from as TierName];
+  const b = TIERS[to as TierName];
+  return Boolean(a && b) && b.price_usd > a.price_usd;
+}
+
+/**
  * The tiers as a person reads them, in the order the pricing page lists them.
  *
  * Here rather than beside the Checkout routes so that the account page can

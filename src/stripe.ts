@@ -337,6 +337,18 @@ function rowFor(
 }
 
 /**
+ * When the current period started, in Unix seconds, or 0 if Stripe did not
+ * say. Read from the item first and the subscription second, for the same
+ * reason as periodEnd below.
+ */
+export function periodStart(sub: Stripe.Subscription): number {
+  const item = sub.items?.data?.[0] as { current_period_start?: number } | undefined;
+  const legacy = (sub as unknown as { current_period_start?: number }).current_period_start;
+  const seconds = item?.current_period_start ?? legacy;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+}
+
+/**
  * When the paid-up period ends, as an ISO 8601 string.
  *
  * Stripe moved `current_period_end` off the subscription and onto each of its
@@ -490,39 +502,73 @@ export async function endSubscription(stripe: Stripe, id: string, now = Date.now
     if (missing(err)) return { canceled: false, refunded: 0, refundFailed: false };
     throw err;
   }
-  try {
-    return { canceled: true, refunded: await refundUnused(stripe, sub, now), refundFailed: false };
-  } catch (err) {
-    const invoice = idOf(sub.latest_invoice);
-    log(
-      `stripe: REFUND OWED, issue it by hand. Subscription ${sub.id} (customer ${idOf(sub.customer)}, invoice ${invoice || "none"}) ` +
-        `was canceled but its unused time was not refunded: ${(err as Error).message}`,
-    );
-    return { canceled: true, refunded: 0, refundFailed: true };
+  const latest = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
+  if (!latest?.id) return { canceled: true, refunded: 0, refundFailed: false };
+  // An upgrade is paid on an invoice of its own (POST /billing/upgrade), so
+  // the month it upgraded was paid on two: the plan's own invoice and the
+  // upgrade's. Each has unused time to give back. Only then is Stripe asked
+  // for the earlier one; every other cancellation has just the one invoice.
+  const invoices: Stripe.Invoice[] = [latest];
+  let refunded = 0;
+  let refundFailed = false;
+  if (latest.billing_reason === "subscription_update") {
+    try {
+      const earlier = await stripe.invoices.list({ subscription: sub.id, status: "paid", limit: 10 });
+      invoices.push(...earlier.data.filter((invoice) => invoice.id !== latest.id));
+    } catch (err) {
+      owed(sub, "the earlier invoices", err);
+      refundFailed = true;
+    }
   }
+  for (const invoice of invoices) {
+    try {
+      // The latest invoice keeps the key it always had, so a deletion retried
+      // across this change still cannot refund it twice.
+      const key = invoice === latest ? `unused-time:${sub.id}` : `unused-time:${sub.id}:${invoice.id}`;
+      refunded += await refundUnused(stripe, sub, invoice, now, key);
+    } catch (err) {
+      owed(sub, `invoice ${invoice.id}`, err);
+      refundFailed = true;
+    }
+  }
+  return { canceled: true, refunded, refundFailed };
+}
+
+function owed(sub: Stripe.Subscription, what: string, err: unknown): void {
+  log(
+    `stripe: REFUND OWED, issue it by hand. Subscription ${sub.id} (customer ${idOf(sub.customer)}, ${what}) ` +
+      `was canceled but its unused time was not refunded: ${(err as Error).message}`,
+  );
 }
 
 /**
- * Refund the unused share of what the subscription's latest invoice took.
+ * Refund the unused share of what one of the subscription's invoices took.
  *
  * The share is the time left in the period the invoice paid for, over the
  * whole of that period, read off the invoice's own lines. That is right for
- * an ordinary monthly invoice and for the proration invoice an upgrade makes,
- * whose lines start at the upgrade. A trial or a 100% off code paid nothing,
- * and gets nothing back. Rounded down to the cent, and never more than the
- * payment it is refunded against.
+ * an ordinary monthly invoice and for the invoice an upgrade makes, whose
+ * lines cover the whole period because the upgrade is charged as though made
+ * at its start. An invoice for a period already over gives nothing back. A
+ * trial or a 100% off code paid nothing, and gets nothing back. Rounded down
+ * to the cent, and never more than the payment it is refunded against.
  *
  * The sales tax goes back with it, and has to: `amount_paid` is the total
  * including tax, so the refund carries the same share of the tax as of the
  * price. Stripe Tax records a refund of an invoice's charge as a reversal,
  * so the tax reports show it as refunded without a separate credit note.
  *
- * The idempotency key is the subscription, so a retried deletion or a second
- * webhook for the same orphan can never refund one subscription twice.
+ * The idempotency key names the subscription (and, for any invoice but the
+ * latest, the invoice), so a retried deletion or a second webhook for the
+ * same orphan can never refund one payment twice.
  */
-async function refundUnused(stripe: Stripe, sub: Stripe.Subscription, now: number): Promise<number> {
-  const invoice = typeof sub.latest_invoice === "object" ? sub.latest_invoice : null;
-  if (!invoice?.id || invoice.status !== "paid" || invoice.amount_paid <= 0) return 0;
+async function refundUnused(
+  stripe: Stripe,
+  sub: Stripe.Subscription,
+  invoice: Stripe.Invoice,
+  now: number,
+  idempotencyKey: string,
+): Promise<number> {
+  if (invoice.status !== "paid" || invoice.amount_paid <= 0) return 0;
 
   const periods = (invoice.lines?.data ?? []).map((line) => line.period).filter((p) => p && p.end > p.start);
   if (!periods.length) throw new Error(`invoice ${invoice.id} has no period to prorate over`);
@@ -549,7 +595,7 @@ async function refundUnused(stripe: Stripe, sub: Stripe.Subscription, now: numbe
       reason: "requested_by_customer",
       metadata: { subscription: sub.id, invoice: invoice.id, why: "account deleted, unused time" },
     },
-    { idempotencyKey: `unused-time:${sub.id}` },
+    { idempotencyKey },
   );
   log(`stripe: refunded ${amount} of ${invoice.amount_paid} ${invoice.currency} on ${sub.id}, the unused time`);
   return amount;
