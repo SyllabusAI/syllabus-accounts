@@ -236,7 +236,7 @@ export function termsPage(): string {
   }).join("");
   return page(
     "Terms",
-    `<p class="muted">Last updated September 29, 2026.</p>
+    `<p class="muted">Last updated October 12, 2026.</p>
      <p>These terms are an agreement between you and Main Course Media LLC, a Texas limited liability company ("we,"
         "us," or "our"), for Syllabus, its Mac app, its website, and this account service. By creating an account or using
         Syllabus you accept them. If you do not accept them, do not use Syllabus. Section headings are for convenience
@@ -280,9 +280,11 @@ export function termsPage(): string {
            any sales tax, until you cancel. We will email you before a price goes up, and a new price starts only at
            your next renewal.</li>
        <li><strong>Hours.</strong> A plan's hours are for its month and do not carry over. When they run out, recording
-           stops until the next month or until you add hours. You are never billed for going over.</li>
-       <li><strong>Extra hours.</strong> You can buy 5 more hours for $5 as a
-           one-time payment. They are for the current month and do not carry over.</li>
+           stops until the next month or until you upgrade. You are never billed for going over.</li>
+       <li><strong>Upgrading.</strong> You can move to a bigger plan from your account page. We charge the difference
+           between the two plans' monthly prices right away, plus any sales tax, and your hours for the month go up
+           once that payment goes through. Your plan then renews at the new price on its usual date. To move to a
+           smaller plan, cancel, then choose the smaller plan once your current month ends.</li>
      </ul>
      <h3>Refunds</h3>
      <ul>
@@ -290,12 +292,10 @@ export function termsPage(): string {
            hours until the end of the month you have paid for, and you are not charged again. Canceling does not refund
            the current month.</li>
        <li><strong>Deleting your account.</strong> We cancel your plan and refund the unused part of the current month
-           to your card, in proportion to the time left. Tax is refunded in the same proportion.</li>
-       <li><strong>Extra hours.</strong> Extra hours are not refundable once bought, except as this section says: if
-           you were charged in error, if the law requires a refund, or if you delete your account and the purchase was
-           made after the deletion.</li>
+           to your card, in proportion to the time left, including any upgrade you paid for that month. Tax is refunded
+           in the same proportion.</li>
        <li><strong>If we end Syllabus.</strong> If we stop offering Syllabus, we will give you at least 30 days' notice
-           and refund any month you have paid for and not received, and any extra hours not yet used.</li>
+           and refund any month you have paid for and not received.</li>
        <li><strong>Billing errors.</strong> If you were charged the wrong amount, or twice, write to ${CONTACT} within
            60 days and we will correct it and refund the difference.</li>
        <li><strong>Where the law says otherwise.</strong> We will give any refund the law requires. Refunds go to the
