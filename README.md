@@ -47,8 +47,7 @@ their Google Drive grant.
   A Checkout that was open in another tab and finishes after the deletion
   starts a subscription for an account that is gone; the webhook sees the
   stamped account is missing, cancels and refunds that subscription, and
-  deletes its customer unless a live account still uses it. A top-up paid
-  that way is refunded in full.
+  deletes its customer unless a live account still uses it.
 
 ## The device flow
 
@@ -408,7 +407,6 @@ Stripe owns the subscription. This service mirrors it, and the mirror is what
 decides what anybody may spend:
 
     POST /billing/checkout   (session) start a Stripe Checkout for a tier
-    POST /billing/topup      (session) buy 5 more hours for this month
     POST /billing/portal     (session) open Stripe's Billing Portal
     POST /stripe/webhook     authenticated by Stripe's signature alone
 
@@ -457,17 +455,9 @@ trial, which costs them nothing, because their subscription is free from the
 first day.
 
 **A cap is a hard stop and never a surprise bill.** An account that runs out
-is refused by the proxy and offered one more purchase: 5 hours for $5, a
-one-time payment that lands on the current month only. Top-ups are summed at
-the point the allowance is READ, not written into the allowance row, because
-that row is recomputed from the subscription every time Stripe says anything
-and hours somebody paid for must not be erased by a renewal. The reservation,
-the global ceiling and the refusal all see one larger number and need no
-change.
-
-The account page adds top-ups the same way the proxy does. It got that wrong
-once during this work and showed a capped account hours it was in fact allowed
-to use, which is the one way that section is allowed to be wrong.
+is refused by the proxy until the month turns over. Nothing is sold on top of
+a plan: a one-time "5 more hours" top-up was built and then dropped before
+launch (2026-10-12), and `migrations/0020_drop_topups.sql` removed its table.
 
 Three things a webhook has to get right, and how:
 
@@ -505,9 +495,8 @@ its own data, its own keys, its own webhook endpoints. Nothing in it carries
 over. At launch these are recreated in live mode, and each one produces a new
 value that has to land here:
 
-1. The three Products and Prices, plus the one-time top-up Price. The new
-   `price_` ids replace the four `STRIPE_PRICE_*` vars in `wrangler.jsonc`,
-   which is a commit and a deploy.
+1. The three Products and Prices. The new `price_` ids replace the three
+   `STRIPE_PRICE_*` vars in `wrangler.jsonc`, which is a commit and a deploy.
 2. The webhook endpoint, at the same `/stripe/webhook` URL. Its new signing
    secret replaces `STRIPE_WEBHOOK_SECRET`.
 3. The live secret key replaces `STRIPE_SECRET_KEY`.

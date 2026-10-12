@@ -156,47 +156,6 @@ billing.post("/billing/portal", async (c) => {
   }
 });
 
-/**
- * Five more hours for this month, for somebody a cap has stopped.
- *
- * A one-time payment, not a change to the plan. The hours land on the current
- * period only and the button says so before the money moves; somebody who
- * needs them every month is better off on a bigger plan, and the price is set
- * so that is true.
- */
-billing.post("/billing/topup", async (c) => {
-  const { refusal, account } = await ready(c);
-  if (refusal) return refusal;
-
-  if (!c.env.STRIPE_PRICE_TOPUP) {
-    log("billing: a top-up was asked for and STRIPE_PRICE_TOPUP is not set");
-    return c.html(problem("Top-ups are not switched on yet. Nothing was charged."));
-  }
-  const customer = await db.stripeCustomerOf(c.env.DB, account!.id);
-
-  try {
-    const session = await stripeClient(c.env).checkout.sessions.create({
-      mode: "payment",
-      line_items: [{ price: c.env.STRIPE_PRICE_TOPUP, quantity: 1 }],
-      client_reference_id: account!.id,
-      // A payment session has no subscription to stamp, so the session's own
-      // metadata is the only thing that says whose hours these are and what
-      // kind of purchase it was.
-      metadata: { account_id: account!.id, kind: "topup" },
-      ...(customer ? { customer, customer_update: { address: "auto" } } : { customer_email: account!.email }),
-      automatic_tax: { enabled: true },
-      billing_address_collection: "required",
-      success_url: `${c.env.PUBLIC_URL}/?billing=topped-up`,
-      cancel_url: `${c.env.PUBLIC_URL}/?billing=canceled`,
-    });
-    if (!session.url) throw new Error("Stripe returned a session with no url");
-    return c.redirect(session.url, 303);
-  } catch (err) {
-    log(`billing: the top-up would not start, ${(err as Error).message}`);
-    return c.html(problem("Stripe could not start that. Nothing was charged."));
-  }
-});
-
 function problem(message: string): string {
   return page("Billing", `<p class="warn">${message}</p><p class="muted"><a href="/">Back to your account</a></p>`);
 }
@@ -214,27 +173,20 @@ export type BillingView = {
   subscription: db.Subscription | null;
   hasCustomer: boolean;
   audioUsed: number;
-  /** Hours bought on top of the plan this month, in seconds. */
-  toppedUp: number;
-  /** Whether a top-up can be offered at all, which needs a Price in Stripe. */
-  canTopUp: boolean;
 };
 
 export async function billingView(c: Context<AppEnv>, accountId: string): Promise<BillingView> {
-  const [allowance, subs, customer, audioUsed, extra] = await Promise.all([
+  const [allowance, subs, customer, audioUsed] = await Promise.all([
     db.allowance(c.env.DB, accountId),
     db.subscriptionsOf(c.env.DB, accountId),
     db.stripeCustomerOf(c.env.DB, accountId),
     db.usedThisPeriod(c.env.DB, accountId, "transcribe"),
-    db.topupsThisPeriod(c.env.DB, accountId),
   ]);
   return {
     allowance,
     subscription: entitlingSubscription(subs),
     hasCustomer: Boolean(customer),
     audioUsed,
-    toppedUp: extra.audio_seconds,
-    canTopUp: Boolean(c.env.STRIPE_PRICE_TOPUP),
   };
 }
 

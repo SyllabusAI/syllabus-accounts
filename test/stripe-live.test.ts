@@ -5,7 +5,7 @@ import * as live from "../scripts/stripe-live-lib.mjs";
 import stripeSource from "../src/stripe.ts?raw";
 // @ts-expect-error - Vite's raw import, the file as text
 import wranglerSource from "../wrangler.jsonc?raw";
-import { TIERS, TOPUP } from "../src/tiers";
+import { TIERS } from "../src/tiers";
 
 // The live-mode swap's rules, against made-up Stripe answers. Nothing here
 // has a key or reaches Stripe: scripts/stripe-live.mjs is the only thing that
@@ -15,7 +15,6 @@ const IDS = {
   starter: "price_LiveStarter01",
   standard: "price_LiveStandard1",
   pro: "price_LivePro000001",
-  topup: "price_LiveTopup0001",
 };
 
 /** A price as GET /v1/prices/<id>?expand[]=product returns it, live and correct. */
@@ -29,8 +28,8 @@ function price(slot: keyof typeof IDS, over: Record<string, unknown> = {}) {
     currency: "usd",
     billing_scheme: "per_unit",
     unit_amount: expected.unit_amount,
-    type: expected.recurring ? "recurring" : "one_time",
-    recurring: expected.recurring ? { interval: "month", interval_count: 1, usage_type: "licensed" } : null,
+    type: "recurring",
+    recurring: { interval: expected.recurring, interval_count: 1, usage_type: "licensed" },
     tax_behavior: "exclusive",
     product: { id: `prod_${slot}`, object: "product", active: true, livemode: true, name: slot, tax_code: "txcd_10103000" },
     ...over,
@@ -38,7 +37,7 @@ function price(slot: keyof typeof IDS, over: Record<string, unknown> = {}) {
 }
 
 function allGood() {
-  return { starter: price("starter"), standard: price("standard"), pro: price("pro"), topup: price("topup") };
+  return { starter: price("starter"), standard: price("standard"), pro: price("pro") };
 }
 
 describe("what the swap expects of each price", () => {
@@ -46,14 +45,13 @@ describe("what the swap expects of each price", () => {
     expect(live.EXPECTED.starter.unit_amount).toBe(TIERS.starter.price_usd * 100);
     expect(live.EXPECTED.standard.unit_amount).toBe(TIERS.standard.price_usd * 100);
     expect(live.EXPECTED.pro.unit_amount).toBe(TIERS.pro.price_usd * 100);
-    expect(live.EXPECTED.topup.unit_amount).toBe(TOPUP.price_usd * 100);
-    expect(live.EXPECTED.topup.recurring).toBeNull();
+    expect(Object.keys(live.EXPECTED)).toEqual(["starter", "standard", "pro"]);
     for (const slot of ["starter", "standard", "pro"]) expect(live.EXPECTED[slot].recurring).toBe("month");
   });
 });
 
 describe("checking prices against Stripe's answers", () => {
-  it("passes four live prices that match the tiers", () => {
+  it("passes three live prices that match the tiers", () => {
     const r = live.checkAll(IDS, allGood());
     expect(r.errors).toEqual([]);
     expect(r.warnings).toEqual([]);
@@ -94,9 +92,7 @@ describe("checking prices against Stripe's answers", () => {
     expect(live.checkPrice("starter", price("starter", { billing_scheme: "tiered", unit_amount: null })).errors.join()).toMatch(/tiered/);
   });
 
-  it("refuses a recurring top-up and a one-time plan", () => {
-    const monthlyTopup = price("topup", { type: "recurring", recurring: { interval: "month", interval_count: 1 } });
-    expect(live.checkPrice("topup", monthlyTopup).errors.join()).toMatch(/ONE-TIME/);
+  it("refuses a one-time plan", () => {
     expect(live.checkPrice("starter", price("starter", { type: "one_time", recurring: null })).errors.join()).toMatch(/one-time price, expected a monthly/);
   });
 
@@ -111,8 +107,8 @@ describe("checking prices against Stripe's answers", () => {
   });
 
   it("reports a price Stripe could not find rather than skipping it", () => {
-    const r = live.checkAll(IDS, { ...allGood(), topup: new Error("HTTP 404: No such price: 'price_LiveTopup0001'") });
-    expect(r.errors).toEqual([expect.stringMatching(/topup: could not read price_LiveTopup0001 .*No such price/)]);
+    const r = live.checkAll(IDS, { ...allGood(), pro: new Error("HTTP 404: No such price: 'price_LivePro000001'") });
+    expect(r.errors).toEqual([expect.stringMatching(/pro: could not read price_LivePro000001 .*No such price/)]);
   });
 
   it("refuses something that is not a price at all", () => {
@@ -121,7 +117,7 @@ describe("checking prices against Stripe's answers", () => {
 });
 
 describe("reading the ids", () => {
-  it("takes all four from flags, or from a file, with flags winning", () => {
+  it("takes all three from flags, or from a file, with flags winning", () => {
     expect(live.parseIds(IDS)).toEqual({ ids: IDS, problems: [] });
     expect(live.parseIds({}, IDS)).toEqual({ ids: IDS, problems: [] });
     const r = live.parseIds({ pro: "price_FromTheFlag01" }, IDS);
@@ -132,7 +128,7 @@ describe("reading the ids", () => {
     const r = live.parseIds({ starter: "prod_Abcdefgh123", standard: IDS.pro, pro: IDS.pro });
     expect(r.problems.join("\n")).toMatch(/starter: "prod_Abcdefgh123" is not a price id/);
     expect(r.problems.join("\n")).toMatch(/pro and standard are the same id/);
-    expect(r.problems.join("\n")).toMatch(/no id for topup/);
+    expect(live.parseIds({ starter: IDS.starter, standard: IDS.standard }).problems.join("\n")).toMatch(/no id for pro/);
   });
 
   it("refuses a file with a key it does not know, or one that is not an object", () => {
@@ -154,15 +150,14 @@ describe("the key", () => {
 });
 
 describe("rewriting wrangler.jsonc", () => {
-  it("changes the four vars in the real file and nothing else", () => {
-    const { text, before } = live.rewriteWrangler(wranglerSource, IDS);
-    expect(before.topup).toBe("");
+  it("changes the three vars in the real file and nothing else", () => {
+    const { text } = live.rewriteWrangler(wranglerSource, IDS);
     for (const [slot, name] of Object.entries(live.SLOTS) as [keyof typeof IDS, string][]) {
       expect(live.wranglerVar(text, name)).toBe(IDS[slot]);
     }
     const changed = (wranglerSource as string).split("\n").filter((line, i) => line !== text.split("\n")[i]);
-    expect(changed).toHaveLength(4);
-    expect(changed.every((line) => /"STRIPE_PRICE_(STARTER|STANDARD|PRO|TOPUP)"/.test(line))).toBe(true);
+    expect(changed).toHaveLength(3);
+    expect(changed.every((line) => /"STRIPE_PRICE_(STARTER|STANDARD|PRO)"/.test(line))).toBe(true);
     // Every comment survives, so the explanation beside each var does too.
     expect(text.split("\n").length).toBe((wranglerSource as string).split("\n").length);
   });

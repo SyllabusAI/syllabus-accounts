@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "../src/db";
-import { TIERS, TOPUP, TRIAL_ALLOWANCE } from "../src/tiers";
+import { TIERS, TRIAL_ALLOWANCE } from "../src/tiers";
 import { claimDevice, get, ORIGIN, postForm, signedInAs } from "./helpers";
 
 afterEach(() => {
@@ -198,138 +198,13 @@ describe("spending the trial ends it", () => {
   });
 });
 
-describe("a top-up is bought once and counted once", () => {
-  it("starts a one-time payment, not a subscription change", async () => {
-    const { account, cookie } = await signedInAs("topper@example.com");
-    await db.linkStripeCustomer(env.DB, "cus_topper", account.id);
-    const sent = calls(() => json({ id: "cs_top", url: "https://checkout.stripe.com/top" }));
-
+describe("nothing is sold on top of a plan", () => {
+  it("has no route that buys extra hours", async () => {
+    const { cookie } = await signedInAs("no-topups@example.com");
+    const sent = calls(() => json({}));
     const res = await postForm("/billing/topup", {}, { Cookie: cookie });
-    expect(res.status).toBe(303);
-    expect(sent[0].body.get("mode")).toBe("payment");
-    expect(sent[0].body.get("line_items[0][price]")).toBe(env.STRIPE_PRICE_TOPUP);
-    // A payment session has no subscription to stamp, so the session's own
-    // metadata is the only thing that names the account.
-    expect(sent[0].body.get("metadata[account_id]")).toBe(account.id);
-    expect(sent[0].body.get("metadata[kind]")).toBe("topup");
-  });
-
-  it("grants the hours when Stripe says the payment went through", async () => {
-    const { account, token } = await claimDevice("topped@example.com");
-    await db.putAllowance(env.DB, account.id, {
-      audio_seconds: TIERS.starter.audio_seconds,
-      summary_tokens: TIERS.starter.summary_tokens,
-      assistant_sessions: 0,
-      source: "starter",
-    });
-
-    await deliver({
-      id: nextId(),
-      type: "checkout.session.completed",
-      data: {
-        object: {
-          id: "cs_topup_1", object: "checkout.session", mode: "payment", payment_status: "paid",
-          customer: "cus_topped", client_reference_id: account.id,
-        },
-      },
-    });
-
-    const usage = (await (await get("/proxy/usage", bearer(token))).json()) as Record<string, any>;
-    expect(usage.audio_seconds.allowance).toBe(TIERS.starter.audio_seconds + TOPUP.audio_seconds);
-    expect(usage.summary_tokens.allowance).toBe(TIERS.starter.summary_tokens + TOPUP.summary_tokens);
-    expect(usage.topped_up).toBe(true);
-    // The plan itself did not change. The top-up sits beside it.
-    expect((await db.allowance(env.DB, account.id))?.audio_seconds).toBe(TIERS.starter.audio_seconds);
-  });
-
-  it("grants nothing for a session that was never paid", async () => {
-    const { account } = await signedInAs("unpaid-top@example.com");
-    await deliver({
-      id: nextId(),
-      type: "checkout.session.completed",
-      data: {
-        object: {
-          id: "cs_topup_unpaid", object: "checkout.session", mode: "payment", payment_status: "unpaid",
-          customer: "cus_unpaid", client_reference_id: account.id,
-        },
-      },
-    });
-    expect(await db.topupsThisPeriod(env.DB, account.id)).toEqual({ audio_seconds: 0, summary_tokens: 0 });
-  });
-
-  it("cannot be granted twice by the same session id", async () => {
-    const { account } = await signedInAs("double-top@example.com");
-    const first = await db.recordTopup(env.DB, "cs_same", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens);
-    const second = await db.recordTopup(env.DB, "cs_same", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens);
-    expect(first).toBe(true);
-    expect(second).toBe(false);
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(TOPUP.audio_seconds);
-  });
-
-  it("survives the allowance being recomputed by a renewal", async () => {
-    // The row is rewritten every time Stripe says anything about the
-    // subscription. Hours somebody paid for must not go with it.
-    const { account } = await signedInAs("renewed@example.com");
-    await db.linkStripeCustomer(env.DB, "cus_renewed", account.id);
-    await db.recordTopup(env.DB, "cs_before_renewal", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens);
-    await deliver({
-      id: nextId(),
-      type: "customer.subscription.updated",
-      data: {
-        object: {
-          id: "sub_renewed", object: "subscription", customer: "cus_renewed", status: "active",
-          cancel_at_period_end: false, metadata: {},
-          items: { data: [{ id: "si_1", price: { id: "price_test_starter" }, current_period_end: Math.floor(Date.now() / 1000) + 30 * 86400 }] },
-        },
-      },
-    });
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(TOPUP.audio_seconds);
-  });
-
-  it("belongs to the month it was bought in", async () => {
-    const { account } = await signedInAs("last-month@example.com");
-    await db.recordTopup(env.DB, "cs_old", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens, "2026-01");
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(0);
-    expect((await db.topupsThisPeriod(env.DB, account.id, "2026-01")).audio_seconds).toBe(TOPUP.audio_seconds);
-  });
-
-  it("is not offered while there is no price for it", async () => {
-    const real = env.STRIPE_PRICE_TOPUP;
-    try {
-      env.STRIPE_PRICE_TOPUP = "";
-      const { cookie } = await signedInAs("no-topup-price@example.com");
-      const sent = calls(() => json({}));
-      const res = await postForm("/billing/topup", {}, { Cookie: cookie });
-      expect(await res.text()).toContain("not switched on yet");
-      expect(sent).toHaveLength(0);
-    } finally {
-      env.STRIPE_PRICE_TOPUP = real;
-    }
-  });
-});
-
-describe("a topped-up account can actually record again", () => {
-  it("lets through audio the plan alone would refuse", async () => {
-    const { account, token, deviceId } = await claimDevice("recovered@example.com");
-    await db.putAllowance(env.DB, account.id, {
-      audio_seconds: 600,
-      summary_tokens: TRIAL_ALLOWANCE.summary_tokens,
-      assistant_sessions: 0,
-      source: "starter",
-    });
-    await db.recordUsage(env.DB, account.id, deviceId, "transcribe", 600);
-
-    // Capped: the plan is spent to the second.
-    const before = (await (await get("/proxy/usage", bearer(token))).json()) as Record<string, any>;
-    expect(before.audio_seconds.left).toBe(0);
-    expect(before.recordable_seconds).toBe(0);
-
-    await db.recordTopup(env.DB, "cs_recover", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens);
-
-    const after = (await (await get("/proxy/usage", bearer(token))).json()) as Record<string, any>;
-    expect(after.audio_seconds.left).toBe(TOPUP.audio_seconds);
-    expect(after.recordable_seconds).toBeGreaterThan(0);
-    expect(after.topped_up).toBe(true);
+    expect(res.status).toBe(404);
+    expect(sent).toHaveLength(0);
   });
 });
 
@@ -359,11 +234,10 @@ describe("what the page says about all of this", () => {
     const html = await (await get("/", { Cookie: cookie })).text();
     expect(html).toContain("trial hours are used up");
     expect(html).toContain("Pro</strong> is starting now");
-    // Not a top-up: the plan about to arrive is more hours for less money.
     expect(html).not.toContain("Add 5 hours");
   });
 
-  it("offers the top-up to a capped subscriber, and says it is a hard stop", async () => {
+  it("tells a capped subscriber it is a hard stop, with nothing extra to buy", async () => {
     const { account, cookie, deviceId } = await claimDevice("page-capped@example.com");
     await db.putAllowance(env.DB, account.id, {
       audio_seconds: TIERS.starter.audio_seconds, summary_tokens: TIERS.starter.summary_tokens,
@@ -377,24 +251,8 @@ describe("what the page says about all of this", () => {
     await db.recordUsage(env.DB, account.id, deviceId, "transcribe", TIERS.starter.audio_seconds);
 
     const html = await (await get("/", { Cookie: cookie })).text();
-    expect(html).toContain("Add 5 hours for $5");
+    expect(html).toContain("Recording is stopped until the month turns over");
     expect(html).toContain("nothing is being billed for going over");
-  });
-
-  it("counts a top-up exactly as the proxy counts it", async () => {
-    // The one way this section is allowed to be wrong, and is not: a page
-    // that says capped while the proxy would take another hour.
-    const { account, cookie, deviceId } = await claimDevice("page-topped@example.com");
-    await db.putAllowance(env.DB, account.id, {
-      audio_seconds: TIERS.starter.audio_seconds, summary_tokens: TIERS.starter.summary_tokens,
-      assistant_sessions: 0, source: "starter",
-    });
-    await db.recordUsage(env.DB, account.id, deviceId, "transcribe", TIERS.starter.audio_seconds);
-    await db.recordTopup(env.DB, "cs_page_top", account.id, TOPUP.audio_seconds, TOPUP.summary_tokens);
-
-    const html = await (await get("/", { Cookie: cookie })).text();
-    expect(html).toContain("5 hours of it topped up");
-    expect(html).toContain("5 hours left");
-    expect(html).not.toContain("Add 5 hours for $5");
+    expect(html).not.toContain("Add 5 hours");
   });
 });

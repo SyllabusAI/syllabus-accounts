@@ -437,7 +437,6 @@ describe("the panel host", () => {
       ["POST", "/drive/disconnect"],
       ["POST", "/billing/checkout"],
       ["POST", "/billing/portal"],
-      ["POST", "/billing/topup"],
       ["POST", "/stripe/webhook"],
       ["GET", "/relay/connect"],
       ["GET", "/settings/x"],

@@ -4,12 +4,12 @@ Everything in billing was built and tested against a Stripe **sandbox**. Live
 mode shares nothing with it: its own products, prices, keys, webhook
 endpoints, portal settings, coupons and tax settings. This is the whole
 switch, in order. Once the dashboard work is done, the code side is pasting
-four price ids into one command and merging the PR it produces.
+three price ids into one command and merging the PR it produces.
 
 The short version:
 
 1. Do the dashboard checklist below, in live mode.
-2. `STRIPE_SECRET_KEY=sk_live_... node scripts/stripe-live.mjs --dry-run --starter price_... --standard price_... --pro price_... --topup price_...`
+2. `STRIPE_SECRET_KEY=sk_live_... node scripts/stripe-live.mjs --dry-run --starter price_... --standard price_... --pro price_...`
 3. The same command without `--dry-run`, then a PR with `wrangler.jsonc` and `worker-configuration.d.ts`. Merging it deploys.
 4. `npx wrangler secret put` the three live secrets the script prints.
 5. Check one real purchase end to end.
@@ -31,7 +31,7 @@ This is the slow part and blocks everything else in live mode.
 
 ### Products and prices
 
-Four products, each with one price. The amounts must be exactly what
+Three products, each with one price. The amounts must be exactly what
 `src/tiers.ts` sells; the script refuses anything else.
 
 | Product | Price | Type | Tax behavior |
@@ -39,7 +39,6 @@ Four products, each with one price. The amounts must be exactly what
 | Syllabus Starter | $9.00 USD | Recurring, monthly (every 1 month), flat rate | Exclusive |
 | Syllabus Standard | $15.00 USD | Recurring, monthly, flat rate | Exclusive |
 | Syllabus Pro | $25.00 USD | Recurring, monthly, flat rate | Exclusive |
-| Syllabus extra hours (5 hours) | $5.00 USD | **One-time** | Exclusive |
 
 - **Tax behavior exclusive**, because the terms say the price is "plus any
   sales tax". The script refuses an inclusive price and warns on an
@@ -51,7 +50,7 @@ Four products, each with one price. The amounts must be exactly what
 - **Do not put a trial on the price.** The 90-day trial is set per Checkout
   session by the code (`TRIAL_PERIOD_DAYS` in `src/tiers.ts`), and only for
   somebody who has never had a trial.
-- Copy the four `price_...` ids (not the `prod_...` ids). Those are what the
+- Copy the three `price_...` ids (not the `prod_...` ids). Those are what the
   script takes.
 
 Getting a pair swapped is the dangerous mistake: it grants the wrong plan at
@@ -81,8 +80,7 @@ The "I have a code" path on the account page opens Checkout with
 so the code alone is what makes it free.
 
 1. Product catalog > Coupons > New: **100% off**, duration **Forever**,
-   applies to the Starter, Standard and Pro products (not the extra hours
-   product).
+   applies to the Starter, Standard and Pro products.
 2. On that coupon, create a **promotion code** with the customer-facing code
    the sandbox used (or a new one). Set a **maximum number of redemptions**
    and an **expiry date**: anyone who learns the code gets a free
@@ -120,10 +118,8 @@ portal configuration is saved once. Settings > Billing > Customer portal:
 ### Checkout settings
 
 - Settings > Payments > Payment methods: **cards (and wallets) are the
-  plan.** A top-up paid by a delayed method (a bank debit, say) is granted
-  when `checkout.session.async_payment_succeeded` arrives, so turning one on
-  no longer loses hours. Account deletion still refunds only a card
-  payment, so keep delayed methods off unless that changes.
+  plan.** Account deletion refunds only a card payment, so keep delayed
+  methods (a bank debit, say) off unless that changes.
 - Settings > Checkout and Payment Links: the business name and branding
   customers will see.
 
@@ -160,7 +156,7 @@ Developers > Webhooks > Add endpoint (in live mode):
   | Resource | Permission | Used for |
   | --- | --- | --- |
   | Subscriptions | Write | canceling the subscription of a deleted account (`subscriptions.cancel`) |
-  | Refunds | Write | refunding the unused time, and a top-up paid after deletion (`refunds.create`) |
+  | Refunds | Write | refunding the unused time (`refunds.create`) |
   | Customers | Write | deleting the customer, which removes the saved card (`customers.del`) |
   | Invoices | **Read** | see below |
   | Everything else | None | |
@@ -191,16 +187,16 @@ From a fresh branch off `main`:
 git checkout main && git pull --ff-only
 git checkout -b <you>/stripe-live
 
-# Dry run: reads the four prices from Stripe, checks them, writes nothing.
+# Dry run: reads the three prices from Stripe, checks them, writes nothing.
 STRIPE_SECRET_KEY=sk_live_... node scripts/stripe-live.mjs --dry-run \
-  --starter price_... --standard price_... --pro price_... --topup price_...
+  --starter price_... --standard price_... --pro price_...
 ```
 
 Or put the ids in a file (it holds only public price ids, but keep it out of
 the commit):
 
 ```json
-{ "starter": "price_...", "standard": "price_...", "pro": "price_...", "topup": "price_..." }
+{ "starter": "price_...", "standard": "price_...", "pro": "price_..." }
 ```
 
 ```sh
@@ -213,13 +209,13 @@ STRIPE_SECRET_KEY` avoids typing it on the command line at all.
 
 For each price it checks: live mode, active, on an active product, USD, a
 flat per-unit amount equal to `src/tiers.ts` ($9, $15, $25 monthly, every
-1 month; $5 one-time for the top-up), and tax behavior. It also refuses a
+1 month), and tax behavior. It also refuses a
 test key, a publishable key, a `prod_` id where a `price_` id belongs, and
 the same id in two slots. Any error means nothing is written.
 
 When the dry run is clean, run it again without `--dry-run`. It then:
 
-- rewrites the four `STRIPE_PRICE_*` vars in `wrangler.jsonc`, leaving every
+- rewrites the three `STRIPE_PRICE_*` vars in `wrangler.jsonc`, leaving every
   comment and every other line alone, and
 - regenerates `worker-configuration.d.ts`, which carries each var as a
   literal type. CI fails a PR whose copy is stale. The script generates it in
@@ -266,8 +262,7 @@ retried by Stripe for about three days, so none are lost.
 
 ## 5. Check it
 
-- The account page shows the three plans, and a capped account now shows
-  "Add 5 hours for $5" (it is hidden while `STRIPE_PRICE_TOPUP` is empty).
+- The account page shows the three plans.
 - Buy Starter with the promotion code: Checkout should ask for an address
   and no card. Then Developers > Webhooks > the live endpoint should show the
   deliveries answered 200, and the account page should show Starter.

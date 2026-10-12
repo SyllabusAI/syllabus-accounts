@@ -25,7 +25,7 @@
  * and means a Stripe outage cannot stop a webhook that has already arrived.
  * The exception is money arriving for an account that was deleted, which
  * nothing else would ever stop: a live subscription is canceled, refunded
- * and its customer removed (endOrphan), and a paid top-up is refunded.
+ * and its customer removed (endOrphan).
  */
 
 import { Hono, type Context } from "hono";
@@ -38,7 +38,6 @@ import {
   entitlingSubscription,
   PERIOD_END_GRACE_MS,
   tierForPrice,
-  TOPUP,
   TRIAL_ALLOWANCE,
 } from "./tiers";
 import { log } from "./log";
@@ -195,7 +194,8 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
 
   // A delayed payment method (a bank debit, say) completes the session unpaid
   // and pays it later in an event of its own, carrying the same session. Both
-  // go through here, and the session id stops the two granting a top-up twice.
+  // go through here; all either does is link the customer, which is the same
+  // write twice.
   if (event.type === "checkout.session.completed" || event.type === "checkout.session.async_payment_succeeded") {
     const session = event.data.object as Stripe.Checkout.Session;
     const accountId = idOf(session.client_reference_id) || idOf(session.metadata?.account_id);
@@ -211,48 +211,13 @@ async function handle(c: Context<AppEnv>, event: Stripe.Event): Promise<string> 
       // from that is retried like any other failure.
       log(`stripe: checkout session named account ${accountId}, which does not exist`);
       // A Checkout page left open in another tab can still be paid after its
-      // account is deleted. A top-up has no events of its own, so the money
-      // goes back here, once per session however often this is delivered. A
-      // subscription is ended here and by its own events below, whichever
-      // lands first.
-      //
-      // Only a top-up this Worker's Checkout made (metadata.kind, which
-      // /billing/topup stamps): anything else paid on the same Stripe account
-      // is some other product's money and is none of this service's business.
-      if (session.mode === "payment" && session.payment_status === "paid" && session.metadata?.kind === "topup") {
-        const intent = idOf(session.payment_intent as string | { id?: string } | null);
-        if (intent) {
-          await deletionStripeClient(c.env).refunds.create(
-            { payment_intent: intent },
-            { idempotencyKey: `orphan-topup:${session.id}` },
-          );
-          log(`stripe: refunded top-up ${session.id}, paid after its account was deleted`);
-        }
-      }
+      // account is deleted. The subscription it started is ended here and by
+      // its own events below, whichever lands first.
       const subscriptionId = session.mode === "subscription" ? idOf(session.subscription) : "";
       if (subscriptionId) await endOrphan(c.env, subscriptionId, customerId);
       return "";
     }
     await db.linkStripeCustomer(c.env.DB, customerId, accountId);
-
-    // A one-time payment is a top-up. It has no subscription behind it, so
-    // this event is the only place the hours can be granted, and the session
-    // id is what stops a redelivery granting them twice.
-    if (session.mode === "payment") {
-      if (session.payment_status !== "paid") {
-        log(`stripe: top-up session ${session.id} is ${session.payment_status}; granting nothing`);
-        return accountId;
-      }
-      const granted = await db.recordTopup(
-        c.env.DB,
-        session.id,
-        accountId,
-        TOPUP.audio_seconds,
-        TOPUP.summary_tokens,
-      );
-      log(`stripe: top-up for ${accountId} ${granted ? "granted" : "was already granted"}`);
-      return accountId;
-    }
 
     // A subscription's own events carry the price, the status and the period,
     // so the allowance is written from those rather than from here.

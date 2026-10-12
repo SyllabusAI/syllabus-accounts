@@ -3,7 +3,7 @@
 import type { BillingView } from "./billing";
 import type { DriveGrant } from "./db";
 import type { Account, Device } from "./env";
-import { SELLABLE, TIERS, TOPUP, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
+import { SELLABLE, TIERS, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { escapeHtml as h, panelUrl } from "./util";
 
 export const STYLE = `
@@ -281,7 +281,7 @@ export function termsPage(): string {
            your next renewal.</li>
        <li><strong>Hours.</strong> A plan's hours are for its month and do not carry over. When they run out, recording
            stops until the next month or until you add hours. You are never billed for going over.</li>
-       <li><strong>Extra hours.</strong> You can buy ${TOPUP.audio_hours} more hours for $${TOPUP.price_usd} as a
+       <li><strong>Extra hours.</strong> You can buy 5 more hours for $5 as a
            one-time payment. They are for the current month and do not carry over.</li>
      </ul>
      <h3>Refunds</h3>
@@ -521,9 +521,6 @@ function billingNotice(notice: string): string {
     return `<p class="ok">Thanks. Stripe has your subscription. It can take a moment to show up below.</p>`;
   }
   if (notice === "canceled") return `<p class="muted">No change was made and nothing was charged.</p>`;
-  if (notice === "topped-up") {
-    return `<p class="ok">Thanks. Your extra hours land as soon as Stripe confirms the payment, usually within a moment.</p>`;
-  }
   return "";
 }
 
@@ -539,30 +536,19 @@ function billingSection(view: BillingView | null): string {
   if (!view) return `<p class="muted">Billing is not switched on yet.</p>`;
 
   const source = view.allowance?.source || "trial";
-  // The SAME sum the proxy enforces: the plan's row plus anything bought on
-  // top of it this month. Leaving the top-up out here once showed a capped
-  // account hours it was in fact allowed to record, which is the one way this
-  // section is allowed to be wrong and is not.
-  const allowedSeconds = (view.allowance?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds) + view.toppedUp;
+  // The SAME number the proxy enforces (allowanceFor in src/proxy.ts).
+  const allowedSeconds = view.allowance?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds;
   const left = Math.max(0, allowedSeconds - view.audioUsed);
   const usedLine = view.audioUsed <= 0
     ? `<p class="muted">Nothing recorded this month. All ${hours(allowedSeconds)} are yours.</p>`
     : left <= 0
-      ? `<p class="warn">All ${hours(allowedSeconds)} are used. Recording is stopped until you add more or the month turns over, and nothing is being billed for going over.</p>`
-      : `<p class="muted">${hours(view.audioUsed)} of ${hours(allowedSeconds)} used this month${view.toppedUp > 0 ? `, ${hours(view.toppedUp)} of it topped up` : ""}. ${hours(left)} left.</p>`;
+      ? `<p class="warn">All ${hours(allowedSeconds)} are used. Recording is stopped until the month turns over, and nothing is being billed for going over.</p>`
+      : `<p class="muted">${hours(view.audioUsed)} of ${hours(allowedSeconds)} used this month. ${hours(left)} left.</p>`;
 
   const sub = view.subscription;
   const manage = view.hasCustomer
     ? `<form method="post" action="/billing/portal" class="inline"><button>Manage billing</button></form>`
     : "";
-  // Offered when the hours are gone, which is the only moment it is the right
-  // answer. A cap is a hard stop, so this is the way past one, and it is one
-  // click rather than a bill that arrives later.
-  const topUp = view.canTopUp && left <= 0
-    ? `<p><form method="post" action="/billing/topup" class="inline"><button class="primary">Add ${TOPUP.audio_hours} hours for $${TOPUP.price_usd}</button></form>
-       <span class="muted">A one-time payment. These hours are for this month.</span></p>`
-    : "";
-
   if (source === "lapsed" || (sub && sub.status === "canceled")) {
     return `<p class="warn">Your subscription has ended, so there are no hours on this account.</p>
       <p class="muted">Starting one again picks up where you left off. Your notes in Drive were never touched.</p>
@@ -573,9 +559,8 @@ function billingSection(view: BillingView | null): string {
     const name = tierName(sub.tier);
     const plan = `$${priceOf(sub.tier)} a month for ${TIERS[sub.tier as TierName]?.audio_hours ?? 0} hours`;
     // Spending the trial is what ends it, and the proxy has already asked
-    // Stripe to do so by the time anybody reads this. So the answer here is
-    // the plan arriving, not a top-up: the plan is more hours for less money
-    // than five bought one at a time.
+    // Stripe to do so by the time anybody reads this, so the answer here is
+    // the plan arriving.
     if (left <= 0) {
       return `<p>Your trial hours are used up, so <strong>${h(name)}</strong> is starting now.</p>
         <p class="muted">Stripe is charging the card you gave at checkout, ${plan}. This page shows the new hours as soon as that goes through.</p>
@@ -597,7 +582,7 @@ function billingSection(view: BillingView | null): string {
     const state = sub.status === "past_due"
       ? `<p class="warn">Stripe could not charge your card and is trying again. Nothing has been cut off.</p>`
       : "";
-    return `<p><strong>${h(name)}</strong>, $${priceOf(sub.tier)} a month.</p>${state}${renewal}${usedLine}${topUp}
+    return `<p><strong>${h(name)}</strong>, $${priceOf(sub.tier)} a month.</p>${state}${renewal}${usedLine}
       <p>${manage}</p>`;
   }
 

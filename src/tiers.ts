@@ -111,22 +111,6 @@ export const TRIAL_GRANT: AllowanceGrant = {
 };
 
 /**
- * What one top-up buys: 5 more hours, and the tokens to summarize them.
- *
- * Priced above a plan's hour on purpose. Starter works out at $0.60 an hour
- * and Pro at $0.55; a top-up is $1.00, which covers the card fee on a small
- * one-off charge and leaves upgrading as the cheaper answer for anybody who
- * needs more hours every month. Tokens follow the same 30k an hour as
- * everything else, so a top-up is usable rather than nominally granted.
- */
-export const TOPUP = {
-  audio_hours: 5,
-  price_usd: 5,
-  audio_seconds: 5 * 3600,
-  summary_tokens: 5 * 30_000,
-};
-
-/**
  * What an account gets when its subscription has stopped paying for anything.
  *
  * Not the trial. An account with no row at all falls back to the trial in

@@ -209,51 +209,24 @@ describe("signature verification", () => {
 // --- Idempotency and replay ---------------------------------------------------
 
 describe("replay", () => {
-  it("grants a top-up once when the same event is delivered concurrently", async () => {
-    const { account } = await signedInAs("concurrent-topup@example.com");
-    const ev = sessionEvent({
-      id: "cs_concurrent",
-      mode: "payment",
-      payment_status: "paid",
-      customer: "cus_concurrent",
-      client_reference_id: account.id,
-      metadata: { kind: "topup" },
-    });
+  it("handles an event once when the same delivery arrives concurrently", async () => {
+    const { account } = await signedInAs("concurrent-session@example.com");
+    const ev = sessionEvent({ id: "cs_concurrent", customer: "cus_concurrent", client_reference_id: account.id });
     const results = await Promise.all([deliver(ev), deliver(ev), deliver(ev), deliver(ev)]);
     const bodies = await Promise.all(results.map((r) => r.json() as Promise<{ duplicate?: boolean }>));
     expect(results.every((r) => r.status === 200)).toBe(true);
     expect(bodies.filter((b) => !b.duplicate)).toHaveLength(1);
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
+    expect(await db.accountIdForLinkedCustomer(env.DB, "cus_concurrent")).toBe(account.id);
   });
 
-  it("grants a top-up once even when Stripe sends the same session under a new event id", async () => {
-    const { account } = await signedInAs("topup-twice@example.com");
-    const make = () =>
-      sessionEvent({ id: "cs_twice", mode: "payment", payment_status: "paid", customer: "cus_twice", client_reference_id: account.id });
-    await deliver(make());
-    await deliver(make());
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
-  });
-
-  it("grants nothing for a top-up session that is not paid yet, and can grant it when it is", async () => {
-    const { account } = await signedInAs("topup-unpaid@example.com");
-    const base = { id: "cs_unpaid", mode: "payment", customer: "cus_unpaid", client_reference_id: account.id };
-    expect((await deliver(sessionEvent({ ...base, payment_status: "unpaid" }))).status).toBe(200);
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(0);
-    await deliver(sessionEvent({ ...base, payment_status: "paid" }));
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
-  });
-
-  it("grants a top-up paid by a delayed method when the payment succeeds, once", async () => {
-    const { account } = await signedInAs("topup-async@example.com");
-    const base = { id: "cs_async", mode: "payment", customer: "cus_async", client_reference_id: account.id };
-    await deliver(sessionEvent({ ...base, payment_status: "unpaid" }));
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(0);
-    const paid = { ...sessionEvent({ ...base, payment_status: "paid" }), type: "checkout.session.async_payment_succeeded" };
+  it("links the customer from a delayed payment's success event as well", async () => {
+    const { account } = await signedInAs("session-async@example.com");
+    const paid = {
+      ...sessionEvent({ id: "cs_async", customer: "cus_async", client_reference_id: account.id }),
+      type: "checkout.session.async_payment_succeeded",
+    };
     expect((await deliver(paid)).status).toBe(200);
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
-    await deliver({ ...paid, id: eventId() });
-    expect((await db.topupsThisPeriod(env.DB, account.id)).audio_seconds).toBe(5 * 3600);
+    expect(await db.accountIdForLinkedCustomer(env.DB, "cus_async")).toBe(account.id);
   });
 
   it("does not let a replayed old event undo a newer one", async () => {
