@@ -14,7 +14,7 @@ route, a secret, or a trust boundary changes.
 | Drive refresh tokens | `drive_grants`, AES-GCM under `DRIVE_KEY` | Standing access to the files Syllabus created in a person's Drive |
 | Provider keys (Groq, OpenAI, Anthropic) | Worker secrets | Real money, shared by every account |
 | Stripe secret key and webhook secret | Worker secrets | Checkout sessions; the webhook is the only thing that writes an allowance |
-| Allowances and usage | `allowances`, `usage`, `topups` | Decide what an account may spend |
+| Allowances and usage | `allowances`, `usage` | Decide what an account may spend |
 | Settings documents | `settings` | A person's class schedule |
 | The relay | One Durable Object per device | Carries a browser into a panel on somebody's Mac |
 
@@ -80,7 +80,7 @@ route, a secret, or a trust boundary changes.
 | `GET/POST /p/:device/*` | session, owner of the device | POST needs `sameOrigin`; path and method allowlist; 64 KB body |
 | `POST /proxy/transcribe`, `/proxy/summarize` | device | Per-account per-minute limit, allowance reserved first, global ceiling, size caps |
 | `GET /proxy/usage` | session or device | Read only |
-| `POST /billing/checkout`, `/portal`, `/topup` | session, `browserOnly` | `sameOrigin`; per-account limit |
+| `POST /billing/checkout`, `/portal` | session, `browserOnly` | `sameOrigin`; per-account limit |
 | `POST /stripe/webhook` | Stripe signature | Lenient per-address limit before the body is read; 256 KB cap; event id idempotency |
 
 Every response carries `X-Content-Type-Options: nosniff`,
@@ -201,7 +201,7 @@ the header refuses alone), and form, multipart, `text/plain` and JSON bodies.
 | `POST /devices/:id/revoke`, `/devices/revoke-all` | cookie | Refused by guard and `sameOrigin` | Medium: signs the victim's Macs out | Sound |
 | `POST /drive/disconnect` | cookie | Refused by guard and `sameOrigin` | Medium: drops the Drive grant | Sound |
 | `POST /account/delete` | cookie plus a recent Google sign-in | Refused by guard and `sameOrigin`; also needs the typed email | Critical: deletes the account | Sound, three independent locks |
-| `POST /billing/checkout`, `/portal`, `/topup` | cookie | Refused by guard and `sameOrigin` before any Stripe call | Medium: starts a charge the victim then has to confirm at Stripe | Sound |
+| `POST /billing/checkout`, `/portal` | cookie | Refused by guard and `sameOrigin` before any Stripe call | Medium: starts a charge the victim then has to confirm at Stripe | Sound |
 | `POST /logout` | cookie | Refused by guard and `sameOrigin` | Low: forced sign-out | Sound |
 | `GET /logout` | cookie | Acts only on `Sec-Fetch-Site: same-origin` or `none`; else a button | Low | Sound |
 | `POST/GET /p/:device/*` (no panel host) | cookie | POST refused by guard and `sameOrigin`; a panel's own scripts are same-origin, which is why the panel host exists | High while panels share the origin | Sound only with `PANEL_ORIGIN` set |

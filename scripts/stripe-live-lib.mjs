@@ -8,37 +8,35 @@
  *
  * What it decides:
  *
- *   ids       the four price ids, from flags or a JSON file, well formed and
+ *   ids       the three price ids, from flags or a JSON file, well formed and
  *             all different
  *   key       the Stripe key is a LIVE secret or restricted key, never a test
  *             one and never a publishable one
  *   prices    each price is live mode, active, USD, on an active product, and
  *             is the amount and shape src/tiers.ts sells: $9, $15 and $25 a
- *             month, and a one-time $5 top-up
- *   wrangler  the four STRIPE_PRICE_* vars rewritten in place, comments and
+ *             month
+ *   wrangler  the three STRIPE_PRICE_* vars rewritten in place, comments and
  *             all, and nothing else in the file touched
  *   events    the webhook events to subscribe to, read out of src/stripe.ts
  *             so this list cannot drift from the handler
  */
 
-/** The four vars in wrangler.jsonc, by the slot this tool calls them. */
+/** The three vars in wrangler.jsonc, by the slot this tool calls them. */
 export const SLOTS = {
   starter: "STRIPE_PRICE_STARTER",
   standard: "STRIPE_PRICE_STANDARD",
   pro: "STRIPE_PRICE_PRO",
-  topup: "STRIPE_PRICE_TOPUP",
 };
 
 /**
  * What each price must be, in cents. test/stripe-live.test.ts checks these
- * against TIERS and TOPUP in src/tiers.ts, so a price change there fails CI
+ * against TIERS in src/tiers.ts, so a price change there fails CI
  * until it is made here too.
  */
 export const EXPECTED = {
   starter: { unit_amount: 900, currency: "usd", recurring: "month" },
   standard: { unit_amount: 1500, currency: "usd", recurring: "month" },
   pro: { unit_amount: 2500, currency: "usd", recurring: "month" },
-  topup: { unit_amount: 500, currency: "usd", recurring: null },
 };
 
 /** The secrets a live switch needs, in the order to set them. */
@@ -54,7 +52,7 @@ export const SECRETS = [
 const PRICE_ID = /^price_[A-Za-z0-9]{8,}$/;
 
 /**
- * The four ids, from flags and/or a parsed JSON file. Flags win over the
+ * The three ids, from flags and/or a parsed JSON file. Flags win over the
  * file. Returns { ids, problems }; ids is only complete when problems is empty.
  */
 export function parseIds(flags = {}, file = null) {
@@ -124,20 +122,16 @@ export function checkPrice(slot, price, expected = EXPECTED[slot]) {
     errors.push(`${slot}: ${price.id} is ${got}, expected ${dollars(expected.unit_amount)}`);
   }
 
-  if (expected.recurring) {
-    const r = price.recurring;
-    if (price.type !== "recurring" || !r) {
-      errors.push(`${slot}: ${price.id} is a one-time price, expected a monthly subscription price`);
-    } else {
-      if (r.interval !== expected.recurring || (r.interval_count ?? 1) !== 1) {
-        errors.push(`${slot}: ${price.id} bills every ${r.interval_count ?? 1} ${r.interval}, expected every 1 ${expected.recurring}`);
-      }
-      if (r.usage_type && r.usage_type !== "licensed") {
-        errors.push(`${slot}: ${price.id} is metered, expected a flat monthly price`);
-      }
+  const r = price.recurring;
+  if (price.type !== "recurring" || !r) {
+    errors.push(`${slot}: ${price.id} is a one-time price, expected a monthly subscription price`);
+  } else {
+    if (r.interval !== expected.recurring || (r.interval_count ?? 1) !== 1) {
+      errors.push(`${slot}: ${price.id} bills every ${r.interval_count ?? 1} ${r.interval}, expected every 1 ${expected.recurring}`);
     }
-  } else if (price.type !== "one_time") {
-    errors.push(`${slot}: ${price.id} is a recurring price, expected a ONE-TIME price (a top-up is a single payment)`);
+    if (r.usage_type && r.usage_type !== "licensed") {
+      errors.push(`${slot}: ${price.id} is metered, expected a flat monthly price`);
+    }
   }
 
   const product = price.product;
@@ -160,7 +154,7 @@ export function checkPrice(slot, price, expected = EXPECTED[slot]) {
 }
 
 /**
- * Check all four. `prices` maps slot to the price Stripe returned, or to an
+ * Check all three. `prices` maps slot to the price Stripe returned, or to an
  * Error when the lookup failed.
  */
 export function checkAll(ids, prices) {
@@ -180,7 +174,7 @@ export function checkAll(ids, prices) {
 }
 
 /**
- * wrangler.jsonc with the four vars pointed at `ids`. Only the quoted value
+ * wrangler.jsonc with the three vars pointed at `ids`. Only the quoted value
  * after each var's name changes, so every comment stays where it was. Throws
  * when a var is missing or appears more than once, rather than guessing which
  * one is meant.

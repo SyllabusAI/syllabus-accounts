@@ -392,24 +392,6 @@ describe("an account that was deleted", () => {
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /v1/subscriptions/sub_already_canceled"]);
   });
 
-  it("refunds a top-up paid after its account was deleted", async () => {
-    const calls = stripeApi();
-    const event = checkoutEvent({
-      id: "cs_topup_after_deletion",
-      mode: "payment",
-      payment_status: "paid",
-      payment_intent: "pi_after_deletion",
-      subscription: null,
-      customer: "cus_topup_after",
-      client_reference_id: "an-account-deleted-before-topping-up",
-      metadata: { account_id: "an-account-deleted-before-topping-up", kind: "topup" },
-    });
-    expect((await deliver(event)).status).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].path).toBe("/v1/refunds");
-    expect(new URLSearchParams(calls[0].body).get("payment_intent")).toBe("pi_after_deletion");
-  });
-
   it("never refunds a payment this service's Checkout did not make", async () => {
     // Another product on the same Stripe account, with a client_reference_id
     // of its own that means nothing here.

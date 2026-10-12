@@ -598,7 +598,7 @@ That is by design (the panel is a remote UI) and is F-05 (Medium).
 taking it back; a forger of Stripe events; anyone with free accounts.
 
 **Entry points.** `POST /stripe/webhook` (`src/stripe.ts:71`),
-`POST /billing/checkout|portal|topup` (`src/billing.ts:74`, `:150`, `:179`),
+`POST /billing/checkout|portal` (`src/billing.ts:74`, `:150`),
 `POST /account/delete` (refund path), the trial.
 
 **Mitigations that exist (verified).**
@@ -610,7 +610,7 @@ taking it back; a forger of Stripe events; anyone with free accounts.
   registered before the auth middleware on purpose (`src/index.ts:50`).
 - **Replays grant nothing.** `claimStripeEvent` is an `INSERT OR IGNORE`
   (`src/db.ts:729`); a handler that fails releases the claim so Stripe's retry
-  works (`src/stripe.ts:107-118`). Top-ups are keyed by Checkout session id.
+  works (`src/stripe.ts:107-118`).
 - **The caller does not choose a price.** Checkout takes a tier name, maps it
   to a Price id from Worker vars (`src/billing.ts:44-50`), and an unrecognized
   Price grants Starter, never more (`wrangler.jsonc` comment; `src/tiers.ts`).

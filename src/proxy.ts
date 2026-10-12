@@ -273,30 +273,16 @@ function ceilingReached(kind: db.UsageKind): Refusal {
   };
 }
 
-/**
- * The account's allowance for the month: its own row, or the trial default,
- * plus anything it has topped up with this period.
- *
- * Top-ups are added here rather than written into the allowance row, because
- * the row is recomputed from the subscription every time Stripe says
- * anything, and a top-up somebody paid for must not be erased by a renewal.
- * Adding them at the point of reading also means the reservation, the global
- * ceiling and the refusal all keep working with no change: they see one
- * larger number, exactly as they would for a larger plan.
- */
+/** The account's allowance for the month: its own row, or the trial default. */
 export async function allowanceFor(database: D1Database, accountId: string) {
-  const [row, extra] = await Promise.all([
-    db.allowance(database, accountId),
-    db.topupsThisPeriod(database, accountId),
-  ]);
+  const row = await db.allowance(database, accountId);
   return {
-    audio_seconds: (row?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds) + extra.audio_seconds,
-    summary_tokens: (row?.summary_tokens ?? TRIAL_ALLOWANCE.summary_tokens) + extra.summary_tokens,
-    // Not topped up and not in the trial: only a plan that includes study
-    // sessions has any (src/tiers.ts), and a top-up buys hours, not sessions.
+    audio_seconds: row?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds,
+    summary_tokens: row?.summary_tokens ?? TRIAL_ALLOWANCE.summary_tokens,
+    // Not in the trial: only a plan that includes study sessions has any
+    // (src/tiers.ts).
     assistant_sessions: row?.assistant_sessions ?? 0,
     source: row?.source || "trial",
-    topped_up: extra.audio_seconds > 0,
   };
 }
 
@@ -857,10 +843,6 @@ proxy.get("/proxy/usage", async (c) => {
   return c.json({
     period: db.usagePeriod(),
     source: allowed.source,
-    // Whether the figures below include hours bought on top of the plan, so a
-    // panel can say "20 hours, 5 of them topped up" rather than implying the
-    // plan grew.
-    topped_up: allowed.topped_up,
     audio_seconds: { used: audio, allowance: allowed.audio_seconds, left: audioLeft },
     summary_tokens: { used: tokens, allowance: allowed.summary_tokens, left: tokensLeft },
     // Study sessions opened this month (src/assistant.ts). Zero allowance is

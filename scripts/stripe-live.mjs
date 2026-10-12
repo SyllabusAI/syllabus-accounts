@@ -6,13 +6,13 @@
  * them to the world.
  *
  *   STRIPE_SECRET_KEY=sk_live_... node scripts/stripe-live.mjs \
- *     --starter price_... --standard price_... --pro price_... --topup price_...
- *   ... --ids ids.json      the four ids as {"starter": "price_...", ...} instead of flags
+ *     --starter price_... --standard price_... --pro price_...
+ *   ... --ids ids.json      the three ids as {"starter": "price_...", ...} instead of flags
  *   ... --dry-run           check everything, print the diff, write nothing
  *
  * Each price is read from Stripe (GET /v1/prices/<id>, nothing is written
  * there) and checked: live mode, active, USD, and the amount and interval
- * src/tiers.ts sells. Only when all four pass are the STRIPE_PRICE_* vars in
+ * src/tiers.ts sells. Only when all three pass are the STRIPE_PRICE_* vars in
  * wrangler.jsonc rewritten, and worker-configuration.d.ts regenerated to
  * match (it carries the ids as literal types, and CI checks it is current). It then PRINTS the secrets to set and the webhook
  * to create; it never sets a secret and never deploys. The deploy is a PR
@@ -79,7 +79,6 @@ async function main() {
       starter: { type: "string" },
       standard: { type: "string" },
       pro: { type: "string" },
-      topup: { type: "string" },
       ids: { type: "string" },
       "dry-run": { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -105,7 +104,7 @@ async function main() {
     return;
   }
 
-  console.log("Reading the four prices from Stripe (read-only)...");
+  console.log("Reading the three prices from Stripe (read-only)...");
   const prices = {};
   await Promise.all(
     Object.keys(SLOTS).map(async (slot) => {
@@ -126,7 +125,7 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  console.log("All four prices match src/tiers.ts.\n");
+  console.log("All three prices match src/tiers.ts.\n");
 
   const current = readFileSync(WRANGLER, "utf8");
   const { text, before } = rewriteWrangler(current, ids);

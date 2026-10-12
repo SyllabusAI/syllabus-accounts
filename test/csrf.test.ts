@@ -144,10 +144,6 @@ const routes: Record<string, (n: number) => Promise<Victim>> = {
     const { cookie } = await signedInAs(`csrf-portal-${n}@example.com`);
     return { cookie, path: "/billing/portal", fields: {}, untouched: async () => {} };
   },
-  "POST /billing/topup": async (n) => {
-    const { cookie } = await signedInAs(`csrf-topup-${n}@example.com`);
-    return { cookie, path: "/billing/topup", fields: {}, untouched: async () => {} };
-  },
   "POST /p/:device/api/* (relay, no panel host)": async (n) => {
     const mine = await claimDevice(`csrf-relay-${n}@example.com`);
     return { cookie: mine.cookie, path: `/p/${mine.deviceId}/api/record/start`, fields: { course: "X" }, untouched: async () => {} };
