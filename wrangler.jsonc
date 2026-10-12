@@ -36,6 +36,12 @@
   "routes": [
     { "pattern": "syllabusaccounts.maincoursemedia.com", "custom_domain": true }
   ],
+  // This Worker's workers.dev address, on so it can be PANEL_ORIGIN (F-02):
+  // workers.dev is on the Public Suffix List, so a panel served there is a
+  // different site from the account pages, not just a different origin. Until
+  // PANEL_ORIGIN names it, the address serves the same app as the custom
+  // domain; the session cookie is host-only, so nobody is signed in there.
+  "workers_dev": true,
   // One Durable Object per claimed panel holds that panel's WebSocket and relays
   // browser requests over it (src/panel-relay.ts). SQLite-backed, which every
   // Workers plan allows.
