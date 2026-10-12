@@ -15,6 +15,9 @@ export default defineConfig(async () => {
           bindings: {
             TEST_MIGRATIONS: migrations,
             PUBLIC_URL: "https://accounts.test",
+            // Production names a panel host (wrangler.jsonc). Tests start without
+            // one, and test/panel-host.test.ts sets its own where it needs it.
+            PANEL_ORIGIN: "",
             GOOGLE_CLIENT_ID: "test-client-id.apps.googleusercontent.com",
             GOOGLE_CLIENT_SECRET: "test-client-secret",
             SESSION_SECRET: "test-session-secret-long-enough-to-sign-with",

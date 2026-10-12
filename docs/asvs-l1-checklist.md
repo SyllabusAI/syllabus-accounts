@@ -21,7 +21,7 @@ Findings carry the IDs from [threat-model-0.6.md](threat-model-0.6.md).
 
 | Result | Rows |
 |---|---|
-| Fail, **High** (blocking) | S2.8 (F-02) |
+| Fail, **High** (blocking) | None since 2026-10-12 (F-02 fixed, see S2.8) |
 | Fail or Partly, Medium | 3.3.1 (F-03, plain logout); S1.9 (F-04); S4.7 (F-06); S5.2, S5.3 (F-07) |
 | Fail or Partly, Low | 14.4.2 (accepted), 14.4.3 (relayed pages), S4.8 (F-10, F-12) |
 | Fixed since 2026-09-29 | 11.1.3, S4.4 (F-01, F-21); 3.4.4 (F-03); 4.2.2 (CSRF guard merged); S3.6 (F-08); 2.7.2 (F-17); 8.2.1 (F-20); S3.7 (F-11) |
@@ -31,9 +31,10 @@ Findings carry the IDs from [threat-model-0.6.md](threat-model-0.6.md).
 F-05 (a browser session is remote control of the Mac's panel) is not a failed
 row: it is the product working as designed, triaged in the threat model.
 
-**Blocking for launch:** F-02 (`PANEL_ORIGIN` is empty, so relayed panels run
-on the account origin), until it is set or accepted in writing. F-01 was fixed
-by PR #51 and F-21 by PR #62. There are no critical findings.
+**Blocking for launch:** nothing. F-02 was fixed on 2026-10-12: `PANEL_ORIGIN`
+is the Worker's workers.dev address, so relayed panels run on a different site
+from the account pages. F-01 was fixed by PR #51 and F-21 by PR #62. There are
+no critical findings.
 
 ## V1 Architecture
 
@@ -243,7 +244,7 @@ Not ASVS rows, but the same standard of evidence. IDs prefixed S.
 | S2.5 | A client cannot invoke `forget` or `state` or impersonate another device | Pass | The Worker overwrites `X-Relay-Op` and `X-Relay-Device` (`src/relay.ts:72-76`) |
 | S2.6 | The Mac checks who is asking | Pass | `intake/signin.py:139-170` |
 | S2.7 | The real panel cannot be displaced by a token holder | **Fail (part of F-02)** | Newest connection wins (`src/panel-relay.ts:212`). Inherent to one-token-one-Mac; the mitigation is not letting the panel's page be trusted, which is S2.8 |
-| S2.8 | The panel's pages cannot reach the account pages | **Fail as deployed (High, F-02)** | `PANEL_ORIGIN` is `""` in `wrangler.jsonc:62`. Code and tests for the separate host exist (PR #41, `test/panel-host.test.ts`); configuration is the gap |
+| S2.8 | The panel's pages cannot reach the account pages | Pass (fixed 2026-10-12, F-02) | `PANEL_ORIGIN` is `https://syllabus-accounts.maincoursemedia.workers.dev` in `wrangler.jsonc`, a different registrable domain from `PUBLIC_URL` (workers.dev is on the Public Suffix List). Code and tests for the separate host: PR #41, `test/panel-host.test.ts` |
 | S2.9 | Cross-site POSTs to a relayed panel are refused | Pass | `src/relay.ts:162`, `src/panel-host.ts:345`; `test/relay.test.ts`, `test/panel-host.test.ts` |
 
 ### The Drive grant
@@ -295,7 +296,8 @@ F-02 do.**
 
 1. ~~F-01: floor the charge by bytes today, settle to the provider's duration next.~~
    Done (PR #51; F-21 closed by PR #62).
-2. F-02: set `PANEL_ORIGIN` on a second registrable domain (or accept in writing).
+2. ~~F-02: set `PANEL_ORIGIN` on a second registrable domain (or accept in writing).~~
+   Done 2026-10-12: the Worker's workers.dev address.
 3. F-03 (plain logout) and F-07 as triaged. F-08 is done (PR #54).
 4. The three Unverified rows: someone with the Cloudflare dashboard looks at
    "Always Use HTTPS" and the minimum TLS version, and the owners read PR #45.
