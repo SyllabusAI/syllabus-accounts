@@ -38,7 +38,7 @@ will not.
 | ID | Severity | Finding | Blocks launch |
 |---|---|---|---|
 | F-01 | **High** | The transcription meter trusts a length the caller writes, so 12 MiB of audio can be charged as one second | No: fixed by PR #51 |
-| F-02 | **High** as deployed | `PANEL_ORIGIN` is empty in `wrangler.jsonc`, so a relayed panel runs on the account origin and a stolen device token becomes script on the account pages | **Yes**, until set or accepted |
+| F-02 | **High** as deployed | `PANEL_ORIGIN` is empty in `wrangler.jsonc`, so a relayed panel runs on the account origin and a stolen device token becomes script on the account pages | No: fixed 2026-10-12, `PANEL_ORIGIN` is the Worker's workers.dev address |
 | F-03 | Medium | Browser sessions cannot be revoked; "sign out every Mac" leaves every browser signed in for up to 30 days | No: fixed by PR #48 and PR #55 |
 | F-04 | Medium | Device-code phishing: a link with the code prefilled and an attacker-chosen Mac name enrolls the attacker's Mac into a victim's account | No |
 | F-05 | Medium | A browser session is remote control of the Mac's panel (start the mic, change setup), and a hijacked relay sees what the owner types | No |
