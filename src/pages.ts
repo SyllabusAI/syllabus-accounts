@@ -281,7 +281,8 @@ export function termsPage(): string {
            your next renewal.</li>
        <li><strong>Hours.</strong> A plan's hours are for its month and do not carry over. When they run out, recording
            stops until the next month or until you upgrade. You are never billed for going over.</li>
-       <li><strong>Upgrading.</strong> You can move to a bigger plan from your account page. We charge the difference
+       <li><strong>Upgrading.</strong> While your plan is active and set to renew, you can move to a bigger plan from
+           your account page. We charge the difference
            between the two plans' monthly prices right away, plus any sales tax, and your hours for the month go up
            once that payment goes through. Your plan then renews at the new price on its usual date. To move to a
            smaller plan, cancel, then choose the smaller plan once your current month ends.</li>

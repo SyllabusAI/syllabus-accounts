@@ -271,6 +271,8 @@ describe("what the terms promise", () => {
   it("describes upgrading the way the route charges it, and sells nothing on top of a plan", async () => {
     const html = await (await get("/terms")).text();
     expect(html).toContain("We charge the difference");
+    // The route only upgrades an active, renewing plan, so the promise says so.
+    expect(html).toContain("While your plan is active and set to renew");
     expect(html).toContain("including any upgrade you paid for that month");
     expect(html).not.toContain("Extra hours");
     expect(html).not.toContain("add hours");
