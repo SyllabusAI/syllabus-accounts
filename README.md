@@ -408,15 +408,17 @@ decides what anybody may spend:
 
     POST /billing/checkout   (session) start a Stripe Checkout for a tier
     POST /billing/portal     (session) open Stripe's Billing Portal
+    POST /billing/upgrade    (session) move an active plan to a bigger one
     POST /stripe/webhook     authenticated by Stripe's signature alone
 
-The two billing routes take a browser session, never a panel's device token.
+The billing routes take a browser session, never a panel's device token.
 A device token sits on a laptop for months, and buying or canceling is not
-something a panel does on its owner's behalf. Both hand off to a page Stripe
-hosts, so no card number, billing address or tax id is ever typed into
-anything this service serves.
+something a panel does on its owner's behalf. Checkout and the portal hand off
+to a page Stripe hosts, and an upgrade charges the card Stripe already holds,
+so no card number, billing address or tax id is ever typed into anything this
+service serves.
 
-Neither route grants anything. A Checkout that completes and a webhook that
+None of them grants anything. A Checkout that completes and a webhook that
 never arrives leaves the account exactly where it was, which is the right way
 around. The account page says so rather than promising a plan it has not read
 yet.
@@ -455,9 +457,32 @@ trial, which costs them nothing, because their subscription is free from the
 first day.
 
 **A cap is a hard stop and never a surprise bill.** An account that runs out
-is refused by the proxy until the month turns over. Nothing is sold on top of
-a plan: a one-time "5 more hours" top-up was built and then dropped before
-launch (2026-10-12), and `migrations/0020_drop_topups.sql` removed its table.
+is refused by the proxy until the month turns over or the plan is upgraded.
+Nothing is sold on top of a plan: a one-time "5 more hours" top-up was built
+and then dropped before launch (2026-10-12), and
+`migrations/0020_drop_topups.sql` removed its table.
+
+### Upgrades, and why the portal does not change plans
+
+An active, renewing plan can move to a bigger one from the account page. The
+first `POST /billing/upgrade` shows the price; only a second one with
+`confirm=1` calls Stripe. It charges the whole difference between the two
+monthly prices right away (Starter to Pro is $16 plus tax), because hours are
+counted by the calendar month and the bigger plan's hours arrive in full as
+soon as the webhook writes them. Stripe is told to prorate as though the
+change were made at the start of the period, which comes to exactly the
+difference, with `payment_behavior: error_if_incomplete`, so a declined card
+leaves the plan as it was.
+
+The Billing Portal's plan switching stays off. The three plans are separate
+Stripe products, and Stripe only holds a downgrade to the end of the period
+between prices of the same product, so a portal downgrade would happen at once
+and credit the difference back after the hours were spent. Moving down is a
+cancellation, then a new plan once the paid month ends.
+
+Deleting an account after an upgrade refunds the unused share of both of that
+month's invoices, the plan's own and the upgrade's (`endSubscription` in
+`src/stripe.ts`).
 
 Three things a webhook has to get right, and how:
 

@@ -3,7 +3,7 @@
 import type { BillingView } from "./billing";
 import type { DriveGrant } from "./db";
 import type { Account, Device } from "./env";
-import { SELLABLE, TIERS, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
+import { isUpgrade, SELLABLE, TIERS, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { escapeHtml as h, panelUrl } from "./util";
 
 export const STYLE = `
@@ -521,6 +521,9 @@ function billingNotice(notice: string): string {
     return `<p class="ok">Thanks. Stripe has your subscription. It can take a moment to show up below.</p>`;
   }
   if (notice === "canceled") return `<p class="muted">No change was made and nothing was charged.</p>`;
+  if (notice === "upgraded") {
+    return `<p class="ok">Thanks. Stripe is moving you to the bigger plan. The new hours show below as soon as it confirms, usually within a moment.</p>`;
+  }
   return "";
 }
 
@@ -536,16 +539,17 @@ function billingSection(view: BillingView | null): string {
   if (!view) return `<p class="muted">Billing is not switched on yet.</p>`;
 
   const source = view.allowance?.source || "trial";
+  const sub = view.subscription;
   // The SAME number the proxy enforces (allowanceFor in src/proxy.ts).
   const allowedSeconds = view.allowance?.audio_seconds ?? TRIAL_ALLOWANCE.audio_seconds;
   const left = Math.max(0, allowedSeconds - view.audioUsed);
+  const canUpgrade = Boolean(sub && renewing(sub) && SELLABLE.some((t) => isUpgrade(sub.tier, t.tier)));
   const usedLine = view.audioUsed <= 0
     ? `<p class="muted">Nothing recorded this month. All ${hours(allowedSeconds)} are yours.</p>`
     : left <= 0
-      ? `<p class="warn">All ${hours(allowedSeconds)} are used. Recording is stopped until the month turns over, and nothing is being billed for going over.</p>`
+      ? `<p class="warn">All ${hours(allowedSeconds)} are used. Recording is stopped until the month turns over${canUpgrade ? " or you upgrade below" : ""}, and nothing is being billed for going over.</p>`
       : `<p class="muted">${hours(view.audioUsed)} of ${hours(allowedSeconds)} used this month. ${hours(left)} left.</p>`;
 
-  const sub = view.subscription;
   const manage = view.hasCustomer
     ? `<form method="post" action="/billing/portal" class="inline"><button>Manage billing</button></form>`
     : "";
@@ -583,7 +587,8 @@ function billingSection(view: BillingView | null): string {
       ? `<p class="warn">Stripe could not charge your card and is trying again. Nothing has been cut off.</p>`
       : "";
     return `<p><strong>${h(name)}</strong>, $${priceOf(sub.tier)} a month.</p>${state}${renewal}${usedLine}
-      <p>${manage}</p>`;
+      ${renewing(sub) ? upgradeOffer(sub.tier, left <= 0) : ""}
+      <p>${manage}</p>${renewing(sub) ? downgradeNote(sub.tier) : ""}`;
   }
 
   if (source === "trial_used") {
@@ -628,6 +633,65 @@ function tierButtons(): string {
         <span class="muted">${h(t.note)}</span>
       </form>`,
   ).join("");
+}
+
+/** Active and not set to end: the only kind of plan that can be upgraded. */
+function renewing(sub: { status: string; cancel_at_period_end: number }): boolean {
+  return sub.status === "active" && !sub.cancel_at_period_end;
+}
+
+/**
+ * The bigger plans, each a button. The price comes on the next page, before
+ * anything is charged (POST /billing/upgrade without confirm=1).
+ */
+function upgradeOffer(tier: string, capped: boolean): string {
+  const bigger = SELLABLE.filter((t) => isUpgrade(tier, t.tier));
+  if (!bigger.length) return "";
+  const buttons = bigger
+    .map(
+      (t) => `<form method="post" action="/billing/upgrade" class="row tight">
+        <input type="hidden" name="tier" value="${h(t.tier)}">
+        <button${capped ? ` class="primary"` : ""}>Upgrade to ${h(t.label)}</button>
+        <span class="muted">${h(t.note)}</span>
+      </form>`,
+    )
+    .join("");
+  return `<p class="muted lead">${capped ? "Need more hours this month?" : "Want more hours?"} Upgrading charges the
+      difference between the two plans right away, and the new hours start as soon as it goes through.</p>${buttons}`;
+}
+
+/** Moving down is not a button: it waits for the paid month to end. */
+function downgradeNote(tier: string): string {
+  if (!SELLABLE.some((t) => isUpgrade(t.tier, tier))) return "";
+  return `<p class="muted">Want a smaller plan? Cancel under Manage billing, then choose the smaller plan here once
+      this one ends. You keep your current hours until then.</p>`;
+}
+
+/**
+ * The page between an Upgrade button and the charge. Says what it costs,
+ * what it buys, and when the plan next renews, before anything moves.
+ */
+export function upgradeConfirmPage(from: TierName, to: TierName, periodEnd: string): string {
+  const now = TIERS[from];
+  const next = TIERS[to];
+  const difference = next.price_usd - now.price_usd;
+  const label = (t: TierName) => SELLABLE.find((s) => s.tier === t)?.label ?? tierName(t);
+  const study = next.assistant_sessions > 0 ? `, plus ${next.assistant_sessions} study sessions` : "";
+  const renews = onDate(periodEnd);
+  return page(
+    `Upgrade to ${label(to)}`,
+    `<p>You are on <strong>${h(label(from))}</strong>, $${now.price_usd} a month for ${now.audio_hours} hours.
+        <strong>${h(label(to))}</strong> is $${next.price_usd} a month for ${next.audio_hours} hours${study}.</p>
+     <p>Upgrading charges <strong>$${difference} now</strong>, plus any sales tax, to the card you pay with. That is
+        the difference between the two plans for this month. This month's hours go up to ${next.audio_hours} as soon
+        as the payment goes through, and your plan then renews at $${next.price_usd} a month${renews ? ` from ${renews}` : ""}.</p>
+     <form method="post" action="/billing/upgrade" class="row">
+       <input type="hidden" name="tier" value="${h(to)}">
+       <input type="hidden" name="confirm" value="1">
+       <button class="primary">Upgrade and pay $${difference}</button>
+     </form>
+     <p class="muted"><a href="/">Keep my current plan</a></p>`,
+  );
 }
 
 function priceOf(tier: string): number {

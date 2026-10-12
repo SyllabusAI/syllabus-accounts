@@ -80,7 +80,7 @@ route, a secret, or a trust boundary changes.
 | `GET/POST /p/:device/*` | session, owner of the device | POST needs `sameOrigin`; path and method allowlist; 64 KB body |
 | `POST /proxy/transcribe`, `/proxy/summarize` | device | Per-account per-minute limit, allowance reserved first, global ceiling, size caps |
 | `GET /proxy/usage` | session or device | Read only |
-| `POST /billing/checkout`, `/portal` | session, `browserOnly` | `sameOrigin`; per-account limit |
+| `POST /billing/checkout`, `/portal`, `/upgrade` | session, `browserOnly` | `sameOrigin`; per-account limit; an upgrade only moves up, and only after a confirm step |
 | `POST /stripe/webhook` | Stripe signature | Lenient per-address limit before the body is read; 256 KB cap; event id idempotency |
 
 Every response carries `X-Content-Type-Options: nosniff`,
@@ -202,6 +202,7 @@ the header refuses alone), and form, multipart, `text/plain` and JSON bodies.
 | `POST /drive/disconnect` | cookie | Refused by guard and `sameOrigin` | Medium: drops the Drive grant | Sound |
 | `POST /account/delete` | cookie plus a recent Google sign-in | Refused by guard and `sameOrigin`; also needs the typed email | Critical: deletes the account | Sound, three independent locks |
 | `POST /billing/checkout`, `/portal` | cookie | Refused by guard and `sameOrigin` before any Stripe call | Medium: starts a charge the victim then has to confirm at Stripe | Sound |
+| `POST /billing/upgrade` | cookie | Refused by guard and `sameOrigin` before any Stripe call | High: charges the card on file with no Stripe page in between | Sound; also needs `confirm=1`, and only moves to a bigger plan |
 | `POST /logout` | cookie | Refused by guard and `sameOrigin` | Low: forced sign-out | Sound |
 | `GET /logout` | cookie | Acts only on `Sec-Fetch-Site: same-origin` or `none`; else a button | Low | Sound |
 | `POST/GET /p/:device/*` (no panel host) | cookie | POST refused by guard and `sameOrigin`; a panel's own scripts are same-origin, which is why the panel host exists | High while panels share the origin | Sound only with `PANEL_ORIGIN` set |

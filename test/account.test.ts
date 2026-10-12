@@ -34,7 +34,8 @@ function paidInvoice(id: string, amountPaid: number, daysUsed: number) {
 
 /**
  * Stripe and Google, scripted. `subs` is what Stripe says each customer holds;
- * `invoices` is the latest invoice a canceled subscription comes back with;
+ * `invoices` is the latest invoice a canceled subscription comes back with,
+ * and `paid` every paid invoice a subscription has had (GET /v1/invoices);
  * `failCancel` makes every cancellation fail the way a Stripe error does, and
  * `failRefund` / `failCustomerDelete` the same for those two calls.
  */
@@ -42,6 +43,7 @@ function outside(
   opts: {
     subs?: Record<string, { id: string; status: string }[]>;
     invoices?: Record<string, unknown>;
+    paid?: Record<string, unknown[]>;
     failCancel?: boolean;
     failRefund?: boolean;
     failCustomerDelete?: boolean;
@@ -72,6 +74,10 @@ function outside(
         }
         const invoice = opts.invoices?.[cancel[1]] ?? null;
         return json(200, { id: cancel[1], object: "subscription", status: "canceled", customer: "cus_x", latest_invoice: invoice });
+      }
+      if (u.hostname === "api.stripe.com" && u.pathname === "/v1/invoices" && method === "GET") {
+        const data = opts.paid?.[u.searchParams.get("subscription") ?? ""] ?? [];
+        return json(200, { object: "list", data, has_more: false, url: "/v1/invoices" });
       }
       if (u.hostname === "api.stripe.com" && u.pathname === "/v1/invoice_payments" && method === "GET") {
         const invoice = u.searchParams.get("invoice") ?? "";
@@ -438,6 +444,44 @@ describe("deleting", () => {
     expect(amount).toBeLessThanOrEqual(900);
     expect(refund.get("metadata[subscription]")).toBe(sub);
     expect(await res.text()).toContain(`$${(amount / 100).toFixed(2)} for its unused days is on its way back`);
+  });
+
+  it("refunds both invoices of a month that was upgraded", async () => {
+    const mine = await fullAccount("upgraded-then-deleted@example.com");
+    const sub = `sub_${mine.account.id}`;
+    // Starter's $9, then $6 more to move to Standard, both for the same
+    // period, 12 of 30 days used: 60% of $15, $9.00, is owed back.
+    const month = paidInvoice("in_month", 900, 12);
+    const upgrade = { ...paidInvoice("in_upgrade", 600, 12), billing_reason: "subscription_update" };
+    const lastMonth = { ...paidInvoice("in_last_month", 900, 42) };
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "active" }] },
+      invoices: { [sub]: upgrade },
+      paid: { [sub]: [upgrade, month, lastMonth] },
+    });
+    const res = await confirm(mine.cookie, "upgraded-then-deleted@example.com");
+    expect(res.status).toBe(200);
+
+    const sent = refunds(calls);
+    expect(sent.map((r) => r.get("payment_intent")).sort()).toEqual(["pi_in_month", "pi_in_upgrade"]);
+    const total = sent.reduce((sum, r) => sum + Number(r.get("amount")), 0);
+    expect(total).toBeGreaterThanOrEqual(897);
+    expect(total).toBeLessThanOrEqual(900);
+    // A month already over gives nothing back, and is not even looked up.
+    expect(calls.some((c) => c.url.includes("invoice=in_last_month"))).toBe(false);
+    expect(await res.text()).toContain(`$${(total / 100).toFixed(2)} for its unused days is on its way back`);
+  });
+
+  it("looks for earlier invoices only after an upgrade", async () => {
+    const mine = await fullAccount("plain-month@example.com");
+    const sub = `sub_${mine.account.id}`;
+    const calls = outside({
+      subs: { [`cus_${mine.account.id}`]: [{ id: sub, status: "active" }] },
+      invoices: { [sub]: paidInvoice("in_plain", 900, 12) },
+    });
+    expect((await confirm(mine.cookie, "plain-month@example.com")).status).toBe(200);
+    expect(calls.some((c) => new URL(c.url).pathname === "/v1/invoices")).toBe(false);
+    expect(refunds(calls)).toHaveLength(1);
   });
 
   it("gives the sales tax back with the price, in the same share", async () => {

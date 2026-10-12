@@ -100,9 +100,13 @@ portal configuration is saved once. Settings > Billing > Customer portal:
   cut them off early. **No proration or refund on cancel**: the terms say
   canceling does not refund the current month. (Refunds for deleted accounts
   are the code's job, `endSubscription` in `src/stripe.ts`.)
-- **Subscription changes (switch plans): if turned on, list only the Starter,
-  Standard and Pro live prices.** The webhook maps a price id to a tier; a
-  price it does not know is granted Starter and logged, whatever was paid.
+- **Subscriptions > Customers can switch plans: OFF.** Upgrades go through
+  the account page instead (`POST /billing/upgrade` in `src/billing.ts`).
+  The three plans are separate products, and Stripe can only hold a
+  downgrade until the period ends when both prices share a product. With
+  switching on, a downgrade happens at once and credits the difference back
+  after the bigger plan's hours have been used, so a Starter subscriber
+  could take Pro's hours every month for Starter's price.
 - **Pause subscriptions: off.** The webhook handles `paused` (it stops
   entitling) but nothing on the account page explains a paused plan.
 - **Payment methods: on**, so an expired card can be replaced while Stripe
@@ -164,7 +168,9 @@ Developers > Webhooks > Add endpoint (in live mode):
   **Invoices: Read is in the list in `src/env.ts` as of 2026-10-01, from
   reading the code rather than a sandbox run.** `endSubscription` cancels with `expand: ["latest_invoice"]` and then
   calls `invoicePayments.list` on that invoice to find the charge to refund,
-  both through this key. A restricted key without read access to invoices is
+  both through this key. After an upgrade it also lists the subscription's
+  paid invoices (`invoices.list`), because the upgraded month was paid on
+  two. A restricted key without read access to invoices is
   likely to have one or both of those refused. If the cancel itself is
   refused, account deletion stops before deleting anything; if only the
   refund is, the log says `REFUND OWED` and it has to be issued by hand.
