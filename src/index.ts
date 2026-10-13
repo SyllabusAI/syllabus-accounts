@@ -152,12 +152,19 @@ app.get("/me", (c) => {
   });
 });
 
-/** A panel signing itself out: its own token stops working. */
+/**
+ * A panel signing itself out: its token stops working and the Mac leaves the
+ * account page, as if removed there. Revoking only the token left the entry
+ * behind "Not connected", and the next sign-in on that Mac added a second
+ * one beside it. A token reaches only its own device, so this removes
+ * nothing its holder could not already make useless.
+ */
 app.post("/device/revoke", async (c) => {
   const device = c.get("device");
   if (!device) return c.json({ error: "not_a_device" }, 401);
   const auth = c.req.header("Authorization") ?? "";
   await db.revokeDeviceToken(c.env.DB, await sha256Hex(auth.slice(7)));
+  await db.revokeDevice(c.env.DB, device.account_id, device.id);
   return c.json({ ok: true });
 });
 

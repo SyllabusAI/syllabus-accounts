@@ -86,13 +86,47 @@ function tidyName(raw: unknown): string {
   return String(raw ?? "").trim().slice(0, 80);
 }
 
+/**
+ * Recognizing a Mac that signs in again.
+ *
+ * A Mac that lost its token (its data folder removed, the app reinstalled
+ * onto a clean home) and signed in again used to become a second device, the
+ * first left "Not connected" on the account page until it idled out. The app
+ * now sends `machine` with /device/start: an opaque id it derives on the Mac
+ * (intake/account.py machine_id), never shown to a browser and never logged.
+ *
+ * Nothing stores it as sent. The pending claim keeps machineHash(machine),
+ * which goes with the claim; the device keeps machineKey(), which binds that
+ * hash to the account and profile, so the stored value means nothing outside
+ * the one account and two accounts signed in on one Mac hold unrelated keys.
+ *
+ * When the new device's token is collected, the account's other live devices
+ * with the same key are revoked like a removal from the account page. It is
+ * done at collection, not approval, so the old entry goes only once the Mac
+ * that asked actually holds its replacement token, and only within the
+ * account that approved: an id cannot reach another account's devices, and
+ * the approval itself is the same person-typed code as before. An app that
+ * sends no id (anything before this) gets no key and today's behavior.
+ */
+const MACHINE_ID = /^[A-Za-z0-9_-]{16,128}$/;
+
+export async function machineHash(raw: unknown): Promise<string | null> {
+  const value = String(raw ?? "");
+  return MACHINE_ID.test(value) ? sha256Hex(`syllabus-machine:${value}`) : null;
+}
+
+export async function machineKey(accountId: string, profile: string, hash: string | null): Promise<string | null> {
+  return hash ? sha256Hex(`syllabus-device:${accountId}:${profile}:${hash}`) : null;
+}
+
 devices.post("/device/start", async (c) => {
   const gate = await db.hitRateLimit(c.env.DB, `device-start:${source(c)}`, LIMITS.deviceStart.limit, LIMITS.deviceStart.window);
   if (!gate.allowed) return rateLimited(c, LIMITS.deviceStart.limit, LIMITS.deviceStart.window, gate.retryAfter);
 
-  const body = (await c.req.json().catch(() => ({}))) as { profile?: string; name?: string };
+  const body = (await c.req.json().catch(() => ({}))) as { profile?: string; name?: string; machine?: string };
   const profile = PROFILES.has(String(body.profile)) ? String(body.profile) : "syllabus";
   const name = tidyName(body.name);
+  const machine = await machineHash(body.machine);
   await db.sweepDeviceCodes(c.env.DB);
   // Expired windows are of no further use and this is the quietest route
   // that runs often enough to clear them.
@@ -112,7 +146,7 @@ devices.post("/device/start", async (c) => {
     if (!(await db.deviceCodeByUserCode(c.env.DB, userCode))) break;
     userCode = newUserCode();
   }
-  await db.insertDeviceCode(c.env.DB, await sha256Hex(deviceCode), userCode, profile, name, plusSeconds(CODE_SECONDS));
+  await db.insertDeviceCode(c.env.DB, await sha256Hex(deviceCode), userCode, profile, name, plusSeconds(CODE_SECONDS), machine);
   const verify = `${c.env.PUBLIC_URL}/device`;
   return c.json({
     device_code: deviceCode,
@@ -182,7 +216,8 @@ devices.post("/device/approve", async (c) => {
     return c.html(devicePage(account, code, "", "That code was already used."), 400);
   }
   const name = pending.device_name || "A Mac";
-  const device = await db.createDevice(c.env.DB, account.id, name, pending.profile);
+  const key = await machineKey(account.id, pending.profile, pending.machine_hash);
+  const device = await db.createDevice(c.env.DB, account.id, name, pending.profile, key);
   const ok = await db.approveDeviceCode(c.env.DB, pending.device_code_hash, account.id, device.id);
   if (!ok) {
     await db.revokeDevice(c.env.DB, account.id, device.id);
@@ -221,6 +256,13 @@ devices.post("/device/poll", async (c) => {
   if (!account) return c.json({ error: "invalid_grant" }, 400);
   const token = newDeviceToken();
   await db.insertDeviceToken(c.env.DB, await sha256Hex(token), pending.approved_device_id, account.token_version);
+  // The token is on its way to the Mac, so its earlier entries can go (see
+  // machineKey above). Scoped to the approving account.
+  for (const old of await db.sameMachineDevices(c.env.DB, account.id, pending.approved_device_id)) {
+    if (await db.revokeDevice(c.env.DB, account.id, old)) {
+      log(`device ${old} replaced by ${pending.approved_device_id} on account ${account.id}`);
+    }
+  }
   return c.json({
     token,
     account: { id: account.id, email: account.email, name: account.name },

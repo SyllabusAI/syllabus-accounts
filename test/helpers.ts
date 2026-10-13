@@ -66,8 +66,8 @@ export function postForm(path: string, fields: Record<string, string>, headers: 
 }
 
 /** Walk the whole device flow: start, approve as `email`, poll. Returns the token. */
-export async function claimDevice(email: string, name = "Test Mac") {
-  const started = (await (await postJson("/device/start", { name, profile: "syllabus" })).json()) as {
+export async function claimDevice(email: string, name = "Test Mac", start: Record<string, string> = {}) {
+  const started = (await (await postJson("/device/start", { name, profile: "syllabus", ...start })).json()) as {
     device_code: string;
     user_code: string;
   };
