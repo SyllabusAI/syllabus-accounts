@@ -29,6 +29,9 @@ export default defineConfig(async () => {
             ANTHROPIC_API_KEY: "sk-ant-test",
             // Two accounts in the Sonnet 5 / 5.5 trial; everyone else is not.
             ASSISTANT_TRIAL_ACCOUNTS: "trial-a@example.com, Trial-B@example.com",
+            // Production may have sales closed (wrangler.jsonc); the billing
+            // tests need them open. test/coming-soon.test.ts closes them.
+            SALES_OPEN: "true",
             STRIPE_PRICE_STARTER: "price_test_starter",
             STRIPE_PRICE_STANDARD: "price_test_standard",
             STRIPE_PRICE_PRO: "price_test_pro",

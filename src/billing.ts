@@ -64,6 +64,7 @@ async function ready(c: Context<AppEnv>) {
 billing.post("/billing/checkout", async (c) => {
   const { refusal, account } = await ready(c);
   if (refusal) return refusal;
+  if (!salesOpen(c.env)) return c.html(problem("Plans are coming soon, so nothing can be bought yet. Nothing was charged."));
 
   const form = await c.req.formData();
   const wanted = String(form.get("tier") ?? "");
@@ -183,6 +184,7 @@ billing.post("/billing/portal", async (c) => {
 billing.post("/billing/upgrade", async (c) => {
   const { refusal, account } = await ready(c);
   if (refusal) return refusal;
+  if (!salesOpen(c.env)) return c.html(problem("Upgrades are coming soon. Your plan has not changed and nothing was charged."));
 
   const form = await c.req.formData();
   const wanted = String(form.get("tier") ?? "");
@@ -244,6 +246,11 @@ billing.post("/billing/upgrade", async (c) => {
   }
 });
 
+/** Whether new plans and upgrades can be bought (SALES_OPEN in src/env.ts). */
+export function salesOpen(env: { SALES_OPEN?: string }): boolean {
+  return env.SALES_OPEN === "true";
+}
+
 function problem(message: string): string {
   return page("Billing", `<p class="warn">${message}</p><p class="muted"><a href="/">Back to your account</a></p>`);
 }
@@ -261,6 +268,8 @@ export type BillingView = {
   subscription: db.Subscription | null;
   hasCustomer: boolean;
   audioUsed: number;
+  /** False while plans are "coming soon": no buttons to buy or upgrade. */
+  salesOpen: boolean;
 };
 
 export async function billingView(c: Context<AppEnv>, accountId: string): Promise<BillingView> {
@@ -275,6 +284,7 @@ export async function billingView(c: Context<AppEnv>, accountId: string): Promis
     subscription: entitlingSubscription(subs),
     hasCustomer: Boolean(customer),
     audioUsed,
+    salesOpen: salesOpen(c.env),
   };
 }
 
