@@ -73,18 +73,20 @@ so a Checkout fails to start in live mode until Stripe Tax is set up there.
 4. Add any other state as its economic nexus threshold is reached; Tax >
    Registrations shows the thresholds being approached.
 
-### The 100%-off promotion code (friends and family)
+### The friends and family promotion code (one free month)
 
 The "I have a code" path on the account page opens Checkout with
-`allow_promotion_codes: true` and no card collected unless one is required,
-so the code alone is what makes it free.
+`allow_promotion_codes: true` and no trial. It always collects a card,
+because the code is free for one month and the plan is charged after that.
+(Until 2026-10-12 the code was 100% off forever and skipped the card.)
 
-1. Product catalog > Coupons > New: **100% off**, duration **Forever**,
+1. Product catalog > Coupons > New: **100% off**, duration **Multiple
+   months, 1**,
    applies to the Starter, Standard and Pro products.
 2. On that coupon, create a **promotion code** with the customer-facing code
    the sandbox used (or a new one). Set a **maximum number of redemptions**
-   and an **expiry date**: anyone who learns the code gets a free
-   subscription with no card (threat model 0.6, F-10b).
+   and an **expiry date**: anyone who learns the code gets a free month
+   (threat model 0.6, F-10b).
 3. Leave "First-time order only" off, so somebody who once paid can still
    redeem it.
 

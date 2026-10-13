@@ -110,12 +110,12 @@ describe("the trial is 5 hours, with a card behind it", () => {
     });
   });
 
-  it("redeeming a code takes no trial and asks for no card", async () => {
+  it("redeeming a code takes no trial and still asks for a card", async () => {
     const { cookie } = await signedInAs("coded@example.com");
     const sent = calls(() => json({ id: "cs_1", url: "https://checkout.stripe.com/x" }));
     await postForm("/billing/checkout", { tier: "pro", redeem: "1" }, { Cookie: cookie });
     const body = sent[0].body;
-    expect(body.get("payment_method_collection")).toBe("if_required");
+    expect(body.get("payment_method_collection")).toBe("always");
     expect(body.get("subscription_data[trial_period_days]")).toBeNull();
     // Still a promotion code field, which is the whole point of this path.
     expect(body.get("allow_promotion_codes")).toBe("true");
