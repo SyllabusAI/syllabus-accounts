@@ -933,7 +933,7 @@ export function panelNotConnectedPage(deviceName: string, lastConnected: string,
     ? `<p>Syllabus reaches this address on its own whenever its panel is running and the Mac is awake and online. Wake the Mac, or check <code class="plain">intake service status</code> there.</p>`
     : `<p>Syllabus has not connected from that Mac yet. It does so on its own once the panel is running and the Mac is signed in to your account.</p>`;
   return page(
-    `${h(name)} is not connected`,
+    `${name} is not connected`,
     `${how}${since}<p class="muted">This page tries again every 10 seconds.</p>
      <p class="muted"><a href="/">Your account</a></p>`,
   ).replace("<title>", '<meta http-equiv="refresh" content="10"><title>');
