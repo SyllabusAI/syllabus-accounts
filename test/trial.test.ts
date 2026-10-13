@@ -60,7 +60,7 @@ describe("the trial is 5 hours, with a card behind it", () => {
     // A trial owes nothing today, so Stripe only collects a card when told to
     // always collect one.
     expect(body.get("payment_method_collection")).toBe("always");
-    expect(body.get("subscription_data[trial_period_days]")).toBe("90");
+    expect(body.get("subscription_data[trial_period_days]")).toBe("7");
   });
 
   it("gives a trialing subscription the 5 hours, not the plan", async () => {
