@@ -724,7 +724,7 @@ function billingSection(view: BillingView | null): string {
   if (source === "lapsed" || (sub && sub.status === "canceled")) {
     return `<p class="warn">Your subscription has ended, so there are no hours on this account.</p>
       <p class="muted">Starting one again picks up where you left off. Your notes in Drive were never touched.</p>
-      ${tierButtons()}${manage ? `<p>${manage}</p>` : ""}`;
+      ${view.salesOpen ? tierButtons() : comingSoon()}${manage ? `<p>${manage}</p>` : ""}`;
   }
 
   if (sub && sub.status === "trialing") {
@@ -755,7 +755,7 @@ function billingSection(view: BillingView | null): string {
       ? `<p class="warn">Stripe could not charge your card and is trying again. Nothing has been cut off.</p>`
       : "";
     return `<p><strong>${h(name)}</strong>, $${priceOf(sub.tier)} a month.</p>${state}${renewal}${usedLine}
-      ${renewing(sub) ? upgradeOffer(sub.tier, left <= 0) : ""}
+      ${renewing(sub) && view.salesOpen ? upgradeOffer(sub.tier, left <= 0) : ""}
       <p>${manage}</p>${renewing(sub) ? downgradeNote(sub.tier) : ""}`;
   }
 
@@ -763,13 +763,17 @@ function billingSection(view: BillingView | null): string {
     // A Google identity that deleted an earlier account after its trial
     // (migrations/0013). No second trial, and no Stripe trial at Checkout.
     return `<p>The free trial for this Google account was already used, on an account that was deleted, so there are no free hours here.</p>
-      <p class="muted">Pick a plan to start recording. Your card is charged when you subscribe, and you can change or cancel it yourself at any time.</p>
-      ${tierButtons()}${redeemForm()}`;
+      ${view.salesOpen
+        ? `<p class="muted">Pick a plan to start recording. Your card is charged when you subscribe, and you can change or cancel it yourself at any time.</p>
+      ${tierButtons()}${redeemForm()}`
+        : comingSoon()}`;
   }
 
   return `<p>You are on the free trial: <strong>${hours(allowedSeconds)}</strong> of lecture audio.</p>${usedLine}
-    <p class="muted">Pick a plan to keep recording once the trial is used up. Every plan starts with 5 hours to try, your card is not charged until those are gone, and you can change or cancel it yourself at any time.</p>
-    ${tierButtons()}${redeemForm()}`;
+    ${view.salesOpen
+      ? `<p class="muted">Pick a plan to keep recording once the trial is used up. Every plan starts with 5 hours to try, your card is not charged until those are gone, and you can change or cancel it yourself at any time.</p>
+    ${tierButtons()}${redeemForm()}`
+      : comingSoon()}`;
 }
 
 function tierName(tier: string): string {
@@ -791,6 +795,12 @@ function redeemForm(): string {
       <select name="tier">${options}</select>
       <button>Redeem a code</button>
     </form>`;
+}
+
+/** In place of the plan buttons while SALES_OPEN is off. */
+function comingSoon(): string {
+  return `<p><strong>Paid plans are coming soon.</strong></p>
+    <p class="muted">You can't subscribe or redeem a code just yet. Check back here soon.</p>`;
 }
 
 function tierButtons(): string {

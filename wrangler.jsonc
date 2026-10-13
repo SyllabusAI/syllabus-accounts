@@ -59,6 +59,8 @@
   ],
   "vars": {
     "PUBLIC_URL": "https://syllabusaccounts.maincoursemedia.com",
+    // "true" opens paid plans; anything else shows "coming soon" (src/env.ts).
+    "SALES_OPEN": "false",
     // Where relayed panels are served, on an origin of their own, so a panel's
     // scripts are never same-origin with the account pages (src/panel-host.ts).
     // Set to this Worker's workers.dev address on 2026-10-12, closing F-02:

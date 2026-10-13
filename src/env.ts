@@ -5,6 +5,14 @@ export type Bindings = {
   /** Where this Worker is published, no trailing slash. */
   PUBLIC_URL: string;
   /**
+   * "true" lets people start or upgrade a paid plan. Anything else shows
+   * "coming soon" instead and refuses /billing/checkout and /billing/upgrade.
+   * Plans that already exist keep working either way: Manage billing, the
+   * webhook and renewals are untouched. Off at launch until Texas sales tax
+   * is registered (2026-10-13).
+   */
+  SALES_OPEN?: string;
+  /**
    * OPTIONAL: the separate origin relayed panels are served from, e.g.
    * https://panels.example.com, no trailing slash. See src/panel-host.ts.
    *
