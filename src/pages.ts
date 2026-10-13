@@ -215,7 +215,7 @@ const ADDRESS = "Main Course Media LLC, 5900 Balcones Drive, Suite 100, Austin, 
 export function privacyPage(): string {
   return page(
     "Privacy",
-    `<p class="muted">Last updated September 29, 2026.</p>
+    `<p class="muted">Last updated October 13, 2026.</p>
      <p>Syllabus records lectures on your Mac and turns them into transcripts, study notes, and study tools. Your
         recordings, transcripts, and notes are stored on your Mac and, if you connect it, in your own Google Drive. They
         are not kept in our database.</p>
@@ -228,7 +228,9 @@ export function privacyPage(): string {
        <li><strong>Your account.</strong> When you sign in with Google we keep your Google account id, email address, and
            display name.</li>
        <li><strong>Your Macs.</strong> For each Mac you connect: its name, when it connected, when it last checked in,
-           its panel address, and a one-way hash of the token that identifies it. The token itself stays on the Mac.</li>
+           its panel address, and a one-way hash of the token that identifies it. The token itself stays on the Mac. We also
+           keep a one-way hash of an id the app makes for that Mac, scrambled differently for every account, so that when
+           the same Mac signs in again it replaces its old entry instead of appearing twice.</li>
        <li><strong>Panel address.</strong> Each connected Mac runs a small control page called its panel, where you see
            your recordings and settings. The panel address is the web address at which this service can show you that
            page in a browser when you are away from the Mac. We keep it so the link on your account page works. Anyone

@@ -116,6 +116,16 @@ can leak.
   the token that enrolled it (`src/db.ts:123`; `test/devices.test.ts`
   "signing out every Mac"). The join in `resolveDeviceToken` checks both
   revocation flags and `t.token_version = a.token_version`.
+- **Re-enrolling the same Mac retires its old entry** (migration 0021,
+  `src/devices.ts` `machineKey`; `test/devices.test.ts` "the same Mac signing
+  in again"). The app sends an opaque machine id with `/device/start`; the
+  device keeps only a hash bound to the approving account and profile, and
+  when the new token is collected the account's other live devices with the
+  same key are revoked. It cannot reach another account's devices, and
+  knowing a victim's id gains a phisher (F-04) nothing beyond removing that
+  victim's own earlier entry, in the account the victim chose to approve
+  into. A Mac signing itself out (`/device/revoke`) now removes its device
+  as well as its token, so it no longer lingers "Not connected".
 - **A device token is not a person.** `browserOnly()` (`src/session.ts:137`)
   refuses it on device approval, device removal, Drive connect and
   disconnect, billing and account deletion (`test/devices.test.ts` "a device

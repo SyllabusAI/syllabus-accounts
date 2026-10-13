@@ -64,6 +64,7 @@ export async function createDevice(
   accountId: string,
   name: string,
   profile: string,
+  machineKey: string | null = null,
 ): Promise<Device> {
   const ts = now();
   const device: Device = {
@@ -77,11 +78,33 @@ export async function createDevice(
   };
   await db
     .prepare(
-      "INSERT INTO devices (id, account_id, name, profile, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO devices (id, account_id, name, profile, created_at, last_seen_at, machine_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(device.id, device.account_id, device.name, device.profile, device.created_at, device.last_seen_at)
+    .bind(device.id, device.account_id, device.name, device.profile, device.created_at, device.last_seen_at, machineKey)
     .run();
   return device;
+}
+
+/**
+ * The account's other live devices that are the same Mac as `deviceId`,
+ * going by the machine key both were enrolled with (see devices.ts
+ * machineKey). Scoped to the account in the WHERE clause, so no key can
+ * reach another account's devices whatever it holds. A device with no key
+ * matches nothing.
+ */
+export async function sameMachineDevices(db: D1Database, accountId: string, deviceId: string): Promise<string[]> {
+  const res = await db
+    .prepare(
+      `SELECT other.id AS id
+         FROM devices d
+         JOIN devices other
+           ON other.account_id = d.account_id AND other.machine_key = d.machine_key
+        WHERE d.id = ? AND d.account_id = ? AND d.machine_key IS NOT NULL
+          AND other.id <> d.id AND other.revoked_at IS NULL`,
+    )
+    .bind(deviceId, accountId)
+    .all<{ id: string }>();
+  return res.results.map((r) => r.id);
 }
 
 /** Revoke a device and every token it holds. Only the owner's devices qualify. */
@@ -224,6 +247,7 @@ export type DeviceCode = {
   approved_account_id: string | null;
   approved_device_id: string | null;
   collected_at: string | null;
+  machine_hash: string | null;
 };
 
 export async function insertDeviceCode(
@@ -233,12 +257,13 @@ export async function insertDeviceCode(
   profile: string,
   deviceName: string,
   expiresAt: string,
+  machineHash: string | null = null,
 ): Promise<void> {
   await db
     .prepare(
-      "INSERT INTO device_codes (device_code_hash, user_code, profile, device_name, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO device_codes (device_code_hash, user_code, profile, device_name, created_at, expires_at, machine_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(deviceCodeHash, userCode, profile, deviceName, now(), expiresAt)
+    .bind(deviceCodeHash, userCode, profile, deviceName, now(), expiresAt, machineHash)
     .run();
 }
 

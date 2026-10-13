@@ -297,3 +297,109 @@ describe("the open device routes have a limit", () => {
     expect((await get("/me", { Authorization: "Bearer " + token })).status).toBe(200);
   });
 });
+
+describe("the same Mac signing in again", () => {
+  const MACHINE = "a".repeat(40) + "0123456789abcdef0123456789abcdef";
+  const OTHER_MACHINE = "b".repeat(64);
+
+  async function liveDevices(accountId: string) {
+    const rows = await env.DB.prepare("SELECT id, name, profile FROM devices WHERE account_id = ? AND revoked_at IS NULL ORDER BY created_at")
+      .bind(accountId)
+      .all<{ id: string; name: string; profile: string }>();
+    return rows.results;
+  }
+
+  it("replaces its earlier entry and retires the old token", async () => {
+    const first = await claimDevice("again@example.com", "Liam's MacBook Pro", { machine: MACHINE });
+    const second = await claimDevice("again@example.com", "Liam's MacBook Pro", { machine: MACHINE });
+    expect(second.account.id).toBe(first.account.id);
+    expect(second.deviceId).not.toBe(first.deviceId);
+    expect((await get("/me", { Authorization: "Bearer " + first.token })).status).toBe(401);
+    expect((await get("/me", { Authorization: "Bearer " + second.token })).status).toBe(200);
+    expect((await liveDevices(first.account.id)).map((d) => d.id)).toEqual([second.deviceId]);
+    const page = await (await get("/", { Cookie: second.cookie })).text();
+    expect(page).toContain(second.deviceId);
+    expect(page).not.toContain(first.deviceId);
+  });
+
+  it("keeps a different Mac on the same account", async () => {
+    const one = await claimDevice("two-macs@example.com", "Desk", { machine: MACHINE });
+    const two = await claimDevice("two-macs@example.com", "Laptop", { machine: OTHER_MACHINE });
+    expect((await liveDevices(one.account.id)).map((d) => d.id)).toEqual([one.deviceId, two.deviceId]);
+    expect((await get("/me", { Authorization: "Bearer " + one.token })).status).toBe(200);
+  });
+
+  it("never touches another account's entry for the same Mac", async () => {
+    const mine = await claimDevice("shared-mac-a@example.com", "Family Mac", { machine: MACHINE });
+    const theirs = await claimDevice("shared-mac-b@example.com", "Family Mac", { machine: MACHINE });
+    expect(theirs.account.id).not.toBe(mine.account.id);
+    expect((await get("/me", { Authorization: "Bearer " + mine.token })).status).toBe(200);
+    expect((await get("/me", { Authorization: "Bearer " + theirs.token })).status).toBe(200);
+    expect((await liveDevices(mine.account.id)).map((d) => d.id)).toEqual([mine.deviceId]);
+    // The stored keys cannot be matched across accounts.
+    const keys = await env.DB.prepare("SELECT machine_key FROM devices WHERE id IN (?, ?)")
+      .bind(mine.deviceId, theirs.deviceId)
+      .all<{ machine_key: string }>();
+    const [a, b] = keys.results.map((r) => r.machine_key);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(b).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
+  });
+
+  it("keeps a second profile on the same Mac apart", async () => {
+    const syllabus = await claimDevice("profiles@example.com", "Mac", { machine: MACHINE });
+    const sous = await claimDevice("profiles@example.com", "Mac", { machine: MACHINE, profile: "sous" });
+    expect((await liveDevices(syllabus.account.id)).map((d) => d.profile)).toEqual(["syllabus", "sous"]);
+    expect((await get("/me", { Authorization: "Bearer " + syllabus.token })).status).toBe(200);
+    expect((await get("/me", { Authorization: "Bearer " + sous.token })).status).toBe(200);
+  });
+
+  it("adds an entry as before when the app sends no id, or one of the wrong shape", async () => {
+    const old1 = await claimDevice("old-app@example.com", "Mac");
+    const old2 = await claimDevice("old-app@example.com", "Mac");
+    const bad1 = await claimDevice("old-app@example.com", "Mac", { machine: "short" });
+    const bad2 = await claimDevice("old-app@example.com", "Mac", { machine: "short" });
+    expect((await liveDevices(old1.account.id)).map((d) => d.id)).toEqual([old1.deviceId, old2.deviceId, bad1.deviceId, bad2.deviceId]);
+    const keyed = await env.DB.prepare("SELECT COUNT(*) AS n FROM devices WHERE account_id = ? AND machine_key IS NOT NULL")
+      .bind(old1.account.id)
+      .first<{ n: number }>();
+    expect(keyed!.n).toBe(0);
+  });
+
+  it("leaves the old entry alone until the new token is collected", async () => {
+    const first = await claimDevice("not-yet@example.com", "Mac", { machine: MACHINE });
+    const started = (await (await postJson("/device/start", { name: "Mac", machine: MACHINE })).json()) as {
+      device_code: string;
+      user_code: string;
+    };
+    await postForm("/device/approve", { user_code: started.user_code }, { Cookie: first.cookie });
+    expect((await get("/me", { Authorization: "Bearer " + first.token })).status).toBe(200);
+    expect(await liveDevices(first.account.id)).toHaveLength(2);
+    const polled = (await (await postJson("/device/poll", { device_code: started.device_code })).json()) as { device: { id: string } };
+    expect((await get("/me", { Authorization: "Bearer " + first.token })).status).toBe(401);
+    expect((await liveDevices(first.account.id)).map((d) => d.id)).toEqual([polled.device.id]);
+  });
+
+  it("stores no copy of the id the app sent", async () => {
+    const started = (await (await postJson("/device/start", { name: "Mac", machine: MACHINE })).json()) as { user_code: string };
+    const pending = await env.DB.prepare("SELECT machine_hash FROM device_codes WHERE user_code = ?")
+      .bind(started.user_code)
+      .first<{ machine_hash: string }>();
+    expect(pending!.machine_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(pending!.machine_hash).not.toBe(MACHINE);
+    const { deviceId } = await claimDevice("no-copy@example.com", "Mac", { machine: MACHINE });
+    const row = await env.DB.prepare("SELECT * FROM devices WHERE id = ?").bind(deviceId).first<Record<string, unknown>>();
+    expect(Object.values(row!)).not.toContain(MACHINE);
+    expect(Object.values(row!)).not.toContain(pending!.machine_hash);
+  });
+});
+
+describe("a Mac signing itself out", () => {
+  it("leaves the account page as well as losing its token", async () => {
+    const mine = await claimDevice("self-out@example.com", "Leaving Mac");
+    expect(await (await get("/", { Cookie: mine.cookie })).text()).toContain("Leaving Mac");
+    expect((await postJson("/device/revoke", {}, { Authorization: "Bearer " + mine.token })).status).toBe(200);
+    expect((await get("/me", { Authorization: "Bearer " + mine.token })).status).toBe(401);
+    expect(await (await get("/", { Cookie: mine.cookie })).text()).not.toContain("Leaving Mac");
+  });
+});
