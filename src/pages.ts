@@ -6,47 +6,203 @@ import type { Account, Device } from "./env";
 import { isUpgrade, SELLABLE, TIERS, TRIAL_ALLOWANCE, TRIAL_PERIOD_DAYS, type TierName } from "./tiers";
 import { escapeHtml as h, panelUrl } from "./util";
 
+/**
+ * The look is Syllabus's own, the same tokens as the Mac app's panel
+ * (LectureAI intake/templates/setup.html) and the /syllabus/ pages on
+ * maincoursemedia.com: a soft lavender canvas, white cards, purple pills.
+ *
+ * Two limits come from the page policy (headers.ts), which admits this one
+ * sheet and loads nothing else. There is no web font: Lexend Deca is named
+ * first and is used where it is installed, and the system face stands in
+ * everywhere else. And the logo is inline SVG drawn here, not the app's
+ * icon.png, because the policy loads no images.
+ *
+ * #8c52ff is 4.41:1 on white, under AA for body text, so it is decoration
+ * only. Anything read in purple uses --deep. Every page carries no style=""
+ * attribute (a test checks), so everything visual lives in this sheet.
+ */
 export const STYLE = `
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.5 system-ui, sans-serif; max-width: 34em; margin: 4em auto; padding: 0 1.5em; }
-  h1 { font-size: 1.4em; margin-bottom: 0.2em; }
-  .muted { opacity: 0.7; font-size: 0.9em; }
-  code, input.code { font: 1.3em/1 ui-monospace, monospace; letter-spacing: 0.12em; }
-  input, button { font: inherit; padding: 0.5em 0.8em; border-radius: 6px; border: 1px solid #8884; }
-  button { cursor: pointer; }
-  button.primary { background: #2563eb; color: white; border-color: transparent; }
-  form.row { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; margin: 1em 0; }
-  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-  td, th { text-align: left; padding: 0.4em 0.6em 0.4em 0; border-bottom: 1px solid #8883; vertical-align: top; }
-  .ok { color: #15803d; }
-  .warn { color: #b45309; }
-  button.danger { background: #b91c1c; color: white; border-color: transparent; }
-  section.danger { margin-top: 3em; padding-top: 1em; border-top: 1px solid #8884; }
-  label { display: block; margin: 1em 0 0.3em; }
-  .foot { margin-top: 3em; }
+  :root {
+    color-scheme: light dark;
+    --bg: #faf9fc; --card: #ffffff; --field: #fbfafd; --ink: #16131f; --muted: #6b6577;
+    --line: #e7e3ee; --brand: #8c52ff; --deep: #6a35d9; --soft: #f3ecff;
+    --btn: #6a35d9; --btn-hover: #5b2cc0;
+    --ok: #128a5b; --ok-soft: #e7f6ef; --warn: #a65400; --warn-soft: #fdf1e3;
+    --err: #c22f3d; --err-hover: #a8222f; --err-line: #f1c9cd;
+    --shadow: 0 1px 2px rgba(22,19,31,.05), 0 8px 24px rgba(22,19,31,.06);
+    --glow: rgba(140,82,255,.13); --bar: rgba(255,255,255,.86);
+    --font: "Lexend Deca", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131019; --card: #1b1725; --field: #15111d; --ink: #f2eefb; --muted: #a49db4;
+      --line: #2c2738; --deep: #c3a6ff; --soft: #241a3d;
+      --btn: #7543e6; --btn-hover: #8c52ff;
+      --ok: #4ecf9b; --ok-soft: #13271f; --warn: #e5a252; --warn-soft: #2a1f12;
+      --err: #ff8792; --err-hover: #d23a48; --err-line: #4a2229;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+      --glow: rgba(140,82,255,.16); --bar: rgba(27,23,37,.86);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: radial-gradient(760px 420px at 50% -120px, var(--glow), transparent 70%) no-repeat, var(--bg);
+    color: var(--ink); font: 400 16px/1.6 var(--font); -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--deep); text-underline-offset: 2px; }
+  a:hover { text-decoration-thickness: 2px; }
+  strong { font-weight: 600; }
+
+  .top { padding: 14px 16px 0; }
+  .top-bar {
+    max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 12px;
+    padding: 8px 18px 8px 10px; background: var(--bar); border: 1px solid var(--line);
+    border-radius: 999px; box-shadow: var(--shadow);
+  }
+  .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+  .brand svg { width: 32px; height: 32px; flex: none; display: block; }
+  .brand-name { font-weight: 600; font-size: 1.05rem; letter-spacing: -.02em; }
+  .brand-tag {
+    margin-left: auto; background: var(--soft); color: var(--deep); font-size: .72rem; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
+  }
+
+  main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 40px 16px 56px; }
+  h1 { font-size: clamp(1.7rem, 4.5vw, 2.2rem); line-height: 1.15; font-weight: 600; letter-spacing: -.025em; margin: 0 0 20px; }
+  h2 { font-size: 1.15rem; line-height: 1.3; font-weight: 600; letter-spacing: -.015em; margin: 1.8em 0 .5em; }
+  h3 { font-size: .8rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 1.6em 0 .4em; }
+  p { margin: 0 0 .9em; }
+  ul { margin: 0 0 1em; padding-left: 1.2em; }
+  li { margin: .35em 0; }
+  li::marker { color: var(--brand); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: var(--shadow); padding: 24px 26px; margin: 0 0 18px; overflow-wrap: anywhere;
+  }
+  .card > :first-child { margin-top: 0; }
+  .card > :last-child { margin-bottom: 0; }
+  section.danger { border-color: var(--err-line); }
+  section.danger h2 { color: var(--err); }
+
+  .muted { color: var(--muted); font-size: .92em; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  p.ok, p.warn { padding: 10px 14px; border-radius: 12px; font-size: .95em; }
+  p.ok { background: var(--ok-soft); }
+  p.warn { background: var(--warn-soft); }
   .lead { margin-top: 1.5em; }
   .nowrap { white-space: nowrap; }
   .inline { display: inline; }
-  .flex { display: flex; gap: 0.6em; flex-wrap: wrap; }
-  form.row.tight { margin: 0.4em 0; }
-  code.plain { font-size: 1em; letter-spacing: 0; }
+  .flex { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .flex input { flex: 1 1 16em; }
+
+  code { font: .92em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--soft); color: var(--deep); padding: 1px 6px; border-radius: 6px; }
+  code.plain { font-size: .92em; }
+
+  input, select, button { font: inherit; font-size: .95rem; }
+  input, select {
+    padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--field); color: var(--ink); min-width: 0;
+  }
+  input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }
+  input::placeholder { color: var(--muted); opacity: .8; }
+  input.code { font: 600 1.25rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .14em; width: 11em; max-width: 100%; text-transform: uppercase; }
+  select { cursor: pointer; }
+  label { display: block; margin: 1.2em 0 .45em; font-weight: 500; font-size: .95rem; }
+
+  button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font-weight: 500; line-height: 1; padding: 11px 20px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink); box-shadow: var(--shadow);
+    white-space: nowrap; transition: border-color .15s ease, color .15s ease, background .15s ease, transform .15s ease;
+  }
+  button:hover { border-color: var(--deep); color: var(--deep); transform: translateY(-1px); }
+  button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+  button.primary { background: var(--btn); border-color: transparent; color: #fff; box-shadow: 0 6px 18px rgba(106,53,217,.28); }
+  button.primary:hover { background: var(--btn-hover); color: #fff; }
+  button.danger { background: var(--err); border-color: transparent; color: #fff; box-shadow: none; }
+  button.danger:hover { background: var(--err-hover); color: #fff; }
+  a > button { pointer-events: none; }
+  form.inline button { margin: 2px 0 2px 6px; padding: 8px 16px; font-size: .88rem; }
+
+  form { margin: 0 0 1em; }
+  form.inline { margin: 0; }
+  form.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 1em 0; }
+  form.row.tight { margin: .5em 0; }
+  form.row .muted { font-size: .88em; }
+
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .95em; }
+  td, th { text-align: left; padding: 12px 12px 12px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td:last-child { padding-right: 0; }
+  table.macs, table.macs tbody { display: block; }
+  table.macs { border-top: 1px solid var(--line); }
+  table.macs tr { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 12px; row-gap: 6px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+  table.macs tr:last-child { border-bottom: 0; }
+  table.macs td { display: block; padding: 0; border: 0; }
+  table.macs td:first-child, table.macs td[colspan] { grid-column: 1 / -1; }
+  table.macs td.nowrap { white-space: normal; font-size: .85em; }
+  table.macs td:last-child { text-align: right; }
+  table.macs td[colspan] { text-align: left; }
+  table.macs form { margin: 0; }
+  table.macs form button { padding: 8px 16px; font-size: .88rem; }
+
+  .site-foot { border-top: 1px solid var(--line); background: var(--card); }
+  .site-foot-in {
+    max-width: 760px; margin: 0 auto; padding: 22px 16px 28px; display: flex; flex-wrap: wrap;
+    gap: 10px 24px; justify-content: space-between; align-items: center; font-size: .85rem; color: var(--muted);
+  }
+  .site-foot-in p { margin: 0; }
+  .site-foot nav { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .site-foot a { color: var(--muted); text-decoration: none; }
+  .site-foot a:hover { color: var(--deep); text-decoration: underline; }
+
+  @media (max-width: 560px) {
+    main { padding-top: 28px; }
+    .card { padding: 20px 18px; border-radius: 16px; }
+    .brand-tag { font-size: .68rem; }
+    form.inline button { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } button:hover { transform: none; } }
 `;
 
-export function page(title: string, body: string): string {
+/**
+ * The app icon, drawn inline: a purple tile with "Sy" and the three ticks.
+ * Inline because the page policy loads no images.
+ */
+const LOGO = `<svg viewBox="0 0 512 512" aria-hidden="true" focusable="false"><rect width="512" height="512" rx="112" fill="#8c52ff"/><text x="104" y="384" fill="#fff" font-family="Arial Rounded MT Bold, Lexend Deca, Helvetica Neue, Arial, sans-serif" font-weight="800" font-size="280" letter-spacing="-10">Sy</text><g stroke="#fff" stroke-width="28" stroke-linecap="round" fill="none"><path d="M343 104l4 80"/><path d="M381 190l34-48"/><path d="M396 212l66-28"/></g></svg>`;
+
+const HEADER = `<header class="top"><div class="top-bar">
+  <a class="brand" href="/">${LOGO}<span class="brand-name">Syllabus</span></a>
+  <span class="brand-tag">Account</span>
+</div></header>`;
+
+const SITE_FOOTER = `<footer class="site-foot"><div class="site-foot-in">
+  <p>A product of Main Course Media LLC.</p>
+  <nav aria-label="About Syllabus"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://github.com/SyllabusAI/LectureAI">Syllabus on GitHub</a></nav>
+</div></footer>`;
+
+/**
+ * One page. The body goes in a single card, unless `sections` says the body
+ * brings its own cards (the account page, one per section).
+ */
+export function page(title: string, body: string, opts: { sections?: boolean } = {}): string {
+  const content = opts.sections ? body : `<div class="card">${body}</div>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${h(title)} · Syllabus</title><style>${STYLE}</style></head>
-<body><h1>${h(title)}</h1>${body}</body></html>`;
+<body>${HEADER}<main><h1>${h(title)}</h1>${content}</main>${SITE_FOOTER}</body></html>`;
 }
-
-const FOOTER = `<p class="muted foot"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/SyllabusAI/LectureAI">Syllabus on GitHub</a></p>`;
 
 export function landing(): string {
   return page(
     "Syllabus accounts",
     `<p class="muted">Syllabus records your lectures on your Mac and files study notes in your Google Drive.
         Sign in to connect a Mac running Syllabus to your account.</p>
-     <p><a href="/login"><button class="primary">Sign in with Google</button></a></p>${FOOTER}`,
+     <p><a href="/login"><button class="primary">Sign in with Google</button></a></p>`,
   );
 }
 
@@ -223,7 +379,7 @@ export function privacyPage(): string {
      <p>${ADDRESS}. ${CONTACT}</p>
      <p>The code for this service is open source at
         <a href="https://github.com/SyllabusAI/syllabus-accounts">github.com/SyllabusAI/syllabus-accounts</a>.</p>
-     ${FOOTER}`,
+     `,
   );
 }
 
@@ -379,7 +535,7 @@ export function termsPage(): string {
      </ul>
      <h2>Contact</h2>
      <p>${ADDRESS}. ${CONTACT}</p>
-     ${FOOTER}`,
+     `,
   );
 }
 
@@ -419,25 +575,34 @@ export function accountPage(
     : `<tr><td colspan="3" class="muted">No Macs yet. Open the Setup page in Syllabus and choose Sign in to a Syllabus account.</td></tr>`;
   return page(
     "Your Syllabus account",
-    `${billingNotice(notice)}<p>Signed in as <strong>${h(account.email)}</strong>${account.name ? ` (${h(account.name)})` : ""}.
-        <form method="post" action="/logout" class="inline"><button>Sign out</button></form></p>
+    `${billingNotice(notice)}<section class="card"><p>Signed in as <strong>${h(account.email)}</strong>${account.name ? ` (${h(account.name)})` : ""}.
+        <form method="post" action="/logout" class="inline"><button>Sign out</button></form></p></section>
+     <section class="card">
      <h2>Your Macs</h2>
      <p class="muted">Each Mac's panel has an address here that only you can open, from any browser or phone, whenever that Mac is awake and its panel is running. A Mac that goes 90 days without using Syllabus is signed out and can sign in again from its Setup page.</p>
-     <table><tbody>${rows}</tbody></table>
+     <table class="macs"><tbody>${rows}</tbody></table>
      ${devices.length ? signOutEverything : ""}
+     </section>
+     <section class="card">
      <h2>Your plan</h2>
      ${billingSection(billing)}
+     </section>
+     <section class="card">
      <h2>Google Drive</h2>
      ${driveSection(grant)}
+     </section>
+     <section class="card">
      <h2>Connect a Mac</h2>
      <p class="muted">Syllabus shows a code on its Setup page. Enter it here.</p>
      ${codeForm("", "")}
-     <section class="danger">
+     </section>
+     <section class="card danger">
        <h2>Delete your account</h2>
        <p class="muted">This removes your Macs, your class schedule, your Google Drive connection, your plan, and your
           usage history from Syllabus, for good. Your recordings and notes stay on your Mac and in your Google Drive.</p>
        <p><a href="/account/delete"><button>Delete your account</button></a></p>
      </section>`,
+    { sections: true },
   );
 }
 
