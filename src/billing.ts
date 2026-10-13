@@ -74,16 +74,14 @@ billing.post("/billing/checkout", async (c) => {
     return c.html(problem("That plan cannot be bought yet. Nothing was charged."));
   }
   /**
-   * Redeeming a code and starting a trial are different sessions, because
-   * they need opposite answers about the card.
+   * Redeeming a code and starting a trial are different sessions: somebody
+   * with a code gets no trial, because the code is their free time.
    *
-   * A trial has nothing to pay today, so Stripe only asks for a card when it
-   * is told to always ask. The friends and family code is 100% off forever,
-   * and a locked decision says that path must not ask for a card at all. One
-   * session cannot be both, and Checkout cannot know at creation time whether
-   * a code will be typed into it. So the person says which they are doing,
-   * and somebody with a code gets no trial, which costs them nothing: their
-   * subscription is free from the first day.
+   * Both ask for a card. The friends and family code was 100% off forever
+   * and skipped the card; since 2026-10-12 it is free for one month, so the
+   * card is needed for the charge that follows. Checkout cannot know at
+   * creation time whether a code will be typed into it, so the person says
+   * which they are doing.
    */
   const redeeming = String(form.get("redeem") ?? "") === "1";
   /**
@@ -122,10 +120,9 @@ billing.post("/billing/checkout", async (c) => {
       // collected before the tax can be worked out.
       automatic_tax: { enabled: true },
       billing_address_collection: "required",
-      // The friends and family code is 100% off, and a subscription that costs
-      // nothing must not stop to ask for a card it will never charge.
+      // Always a card: a trial and a code both end in a paid month.
       allow_promotion_codes: true,
-      payment_method_collection: redeeming ? "if_required" : "always",
+      payment_method_collection: "always",
       success_url: `${c.env.PUBLIC_URL}/?billing=done`,
       cancel_url: `${c.env.PUBLIC_URL}/?billing=canceled`,
     });
