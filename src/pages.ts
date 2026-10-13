@@ -775,11 +775,11 @@ function tierName(tier: string): string {
 }
 
 /**
- * The way in for somebody with a 100%-off code.
+ * The way in for somebody with a code from us.
  *
- * Its own form because it is its own kind of session: no trial, and no card
- * asked for. Checkout cannot know in advance that a code will be typed into
- * it, so the person says so here instead.
+ * Its own form because it is its own kind of session: no trial, since the
+ * code is the free time. Checkout cannot know in advance that a code will be
+ * typed into it, so the person says so here instead.
  */
 function redeemForm(): string {
   const options = SELLABLE.map((t) => `<option value="${h(t.tier)}">${h(t.label)}</option>`).join("");

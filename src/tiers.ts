@@ -94,13 +94,11 @@ export const TRIAL_ALLOWANCE = { audio_seconds: 5 * 3600, summary_tokens: 150_00
  * How long a Stripe trial runs if nothing ends it sooner.
  *
  * The trial is really 5 hours of audio, which is not a thing Stripe can
- * count, so it is expressed as a period that almost nobody reaches and ended
- * early when the hours are spent (endTrialIfSpent in stripe.ts). 90 days is
- * about a semester: long enough that somebody who signs up and then does not
- * record for a month is not charged for a product they never tried, and
- * short enough that an abandoned signup does not sit open forever.
+ * count, so it is also capped by a period and ended early when the hours are
+ * spent (endTrialIfSpent in stripe.ts). 7 days, set 2026-10-12 at launch:
+ * whichever comes first, the 5 hours or the week, starts the paid plan.
  */
-export const TRIAL_PERIOD_DAYS = 90;
+export const TRIAL_PERIOD_DAYS = 7;
 
 /** The trial as a grant, ready to be written to a row. */
 export const TRIAL_GRANT: AllowanceGrant = {

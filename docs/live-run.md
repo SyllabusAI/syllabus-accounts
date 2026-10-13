@@ -34,7 +34,7 @@ finding, even if it looks small.
 | 9 | On the account page, choose Upgrade to Standard, read the next page, then Upgrade and pay $6 | The page says $6 now plus any sales tax and names the renewal date. Stripe charges $6 plus tax at once; within a minute the account page shows Standard and 30 hours this month, still renewing on the same date | |
 | 10 | Open Manage billing | The Stripe billing portal opens: plan, card, invoices, and no way to switch plans there. Close it without changing anything | |
 | 11 | Open the panel from a phone at the address the app shows | The panel opens only after signing in as account A, and Record works from there | |
-| 12 | Sign out, sign in as account B, choose Redeem a code, enter the friends and family code | No card is asked for. The account page shows the plan at no charge. A second attempt with the same code on account B does nothing new | |
+| 12 | Sign out, sign in as account B, choose Redeem a code, enter the friends and family code | A card is asked for, with nothing due today. The account page shows the plan, free for one month. A second attempt with the same code on account B does nothing new | |
 | 13 | Back as account A: Delete my account. Sign in again when asked, type the email, confirm | The page says it is done. In Stripe: the subscription is canceled, refunds for the unused part of the $9 and of the $6 upgrade (and their tax) are issued, and the customer is deleted | |
 | 14 | Sign in again as account A | A new, empty account with no free trial: the page says the trial for this Google account was already used | |
 | 15 | Stop the tail (`kill %1`) and run `node scripts/scan-logs.mjs live-run.jsonl` | "No personal data or secrets found", with a few dozen log lines. Then delete `live-run.jsonl` | |
