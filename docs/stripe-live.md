@@ -174,9 +174,19 @@ Developers > Webhooks > Add endpoint (in live mode):
   likely to have one or both of those refused. If the cancel itself is
   refused, account deletion stops before deleting anything; if only the
   refund is, the log says `REFUND OWED` and it has to be issued by hand.
-  Before launch, create the same restricted key in the sandbox, set it
-  locally, and delete a test account holding a paid subscription to confirm
-  exactly which permissions are needed.
+  Before launch, create the same restricted key in the sandbox and run
+
+  ```sh
+  STRIPE_SECRET_KEY=sk_test_... STRIPE_ACCOUNT_DELETION_KEY=rk_test_... \
+    node scripts/check-deletion-key.mjs
+  ```
+
+  It buys Starter with the test Visa, upgrades it to Standard, then runs
+  account deletion's own `endSubscription` and `deleteCustomer` on the
+  restricted key and says whether Stripe refused anything, and if so which
+  permission it asked for. Sandbox keys only; anything the restricted key
+  could not finish is finished with the secret key, so nothing is left
+  running. Make the live key only once this says the permissions are enough.
 
   Unset, this key falls back to `STRIPE_SECRET_KEY`, so the switch works
   without it; it only narrows what a leak of the main key can do.
