@@ -829,7 +829,7 @@ describe("the free trial after a deletion", () => {
 
     const calls = stripeCheckout();
     await postForm("/billing/checkout", { tier: "starter" }, { Cookie: cookie });
-    expect(calls[0].get("subscription_data[trial_period_days]")).toBe("90");
+    expect(calls[0].get("subscription_data[trial_period_days]")).toBe("7");
   });
 
   it("gives no second Stripe trial to somebody who has subscribed before", async () => {

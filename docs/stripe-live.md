@@ -47,7 +47,7 @@ Three products, each with one price. The amounts must be exactly what
   (`txcd_10103000`). Pick it from the product's tax category list and confirm
   the name there, since that list is the authority. The script warns when a
   product has no tax code.
-- **Do not put a trial on the price.** The 90-day trial is set per Checkout
+- **Do not put a trial on the price.** The 7-day trial is set per Checkout
   session by the code (`TRIAL_PERIOD_DAYS` in `src/tiers.ts`), and only for
   somebody who has never had a trial.
 - Copy the three `price_...` ids (not the `prod_...` ids). Those are what the
